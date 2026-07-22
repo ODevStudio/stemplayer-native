@@ -1,0 +1,67 @@
+[workspace]
+members = [
+    "apps/stemplayer",
+    "apps/stemplayer-probe",
+    "crates/stemplayer-decode",
+    "crates/stemplayer-domain",
+    "crates/stemplayer-engine",
+    "crates/stemplayer-format",
+    "crates/stemplayer-mixer",
+    "crates/stemplayer-network",
+    "crates/stemplayer-output",
+    "crates/stemplayer-platform",
+    "crates/stemplayer-timeline",
+    "crates/stemplayer-ui",
+    "crates/stemplayer-waveform",
+    "phase0-probe",
+]
+default-members = [
+    "apps/stemplayer",
+    "apps/stemplayer-probe",
+    "crates/stemplayer-decode",
+    "crates/stemplayer-domain",
+    "crates/stemplayer-engine",
+    "crates/stemplayer-format",
+    "crates/stemplayer-mixer",
+    "crates/stemplayer-network",
+    "crates/stemplayer-output",
+    "crates/stemplayer-platform",
+    "crates/stemplayer-timeline",
+    "crates/stemplayer-ui",
+    "crates/stemplayer-waveform",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.92"
+
+[workspace.dependencies]
+serde = { version = "=1.0.229", features = ["derive", "rc"] }
+serde_json = "=1.0.151"
+slint = { version = "=1.17.1", default-features = false, features = ["std", "backend-winit-x11", "renderer-software", "accessibility", "compat-1-2"] }
+slint-build = "=1.17.1"
+stemplayer-decode = { path = "crates/stemplayer-decode" }
+stemplayer-domain = { path = "crates/stemplayer-domain" }
+stemplayer-engine = { path = "crates/stemplayer-engine" }
+stemplayer-format = { path = "crates/stemplayer-format" }
+stemplayer-mixer = { path = "crates/stemplayer-mixer" }
+stemplayer-network = { path = "crates/stemplayer-network" }
+stemplayer-output = { path = "crates/stemplayer-output" }
+stemplayer-platform = { path = "crates/stemplayer-platform" }
+stemplayer-timeline = { path = "crates/stemplayer-timeline" }
+stemplayer-ui = { path = "crates/stemplayer-ui" }
+stemplayer-waveform = { path = "crates/stemplayer-waveform" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true

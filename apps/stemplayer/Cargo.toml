@@ -1,0 +1,44 @@
+[package]
+name = "stemplayer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = ["product"]
+product = [
+    "local-wav",
+    "local-mp4",
+    "aac",
+    "alac",
+    "hls",
+    "diagnostics-ui",
+    "windows-integration",
+]
+development = ["stemplayer-ui/development"]
+local-wav = ["stemplayer-format/local-wav"]
+local-mp4 = ["stemplayer-format/local-mp4"]
+aac = ["stemplayer-decode/aac", "local-mp4"]
+alac = ["stemplayer-decode/alac", "local-mp4"]
+hls = ["stemplayer-network/hls"]
+diagnostics-ui = ["stemplayer-ui/diagnostics-ui"]
+windows-integration = ["stemplayer-platform/windows-integration"]
+macos-integration = ["stemplayer-platform/macos-integration"]
+linux-integration = ["stemplayer-platform/linux-integration"]
+
+[dependencies]
+slint.workspace = true
+stemplayer-decode.workspace = true
+stemplayer-domain.workspace = true
+stemplayer-format.workspace = true
+stemplayer-network.workspace = true
+stemplayer-platform.workspace = true
+stemplayer-ui.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+
+[lints]
+workspace = true

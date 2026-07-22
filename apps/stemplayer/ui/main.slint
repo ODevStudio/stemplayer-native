@@ -1,0 +1,316 @@
+import { Button, HorizontalBox, Palette, Slider, VerticalBox } from "std-widgets.slint";
+
+component MixerRow inherits Rectangle {
+    in property <int> role-index;
+    in property <string> role-name;
+    in-out property <float> gain;
+    in-out property <bool> muted;
+    in-out property <bool> soloed;
+    in property <bool> enabled;
+    callback gain-changed(float);
+    callback gain-commit();
+    callback mute-changed(bool);
+    callback solo-changed(bool);
+    height: 50px;
+    background: Palette.alternate-background;
+    border-color: Palette.border;
+    border-width: 1px;
+    accessible-role: groupbox;
+    accessible-label: role-name + " mixer";
+
+    HorizontalBox {
+        padding: 7px;
+        spacing: 8px;
+
+        Text {
+            text: role-name;
+            width: 62px;
+            vertical-alignment: center;
+        }
+
+        gain-slider := Slider {
+            value <=> gain;
+            minimum: -60;
+            maximum: 6;
+            enabled: root.enabled;
+            accessible-label: role-name + " gain";
+            accessible-value: gain + " dB";
+            changed(value) => { root.gain-changed(value); }
+            released(value) => { root.gain-changed(value); root.gain-commit(); }
+        }
+
+        mute := Button {
+            text: "Mute";
+            checkable: true;
+            checked <=> root.muted;
+            enabled: root.enabled;
+            accessible-label: "Mute " + role-name;
+            clicked => { root.mute-changed(self.checked); }
+        }
+
+        solo := Button {
+            text: "Solo";
+            checkable: true;
+            checked <=> root.soloed;
+            enabled: root.enabled;
+            accessible-label: "Solo " + role-name;
+            clicked => { root.solo-changed(self.checked); }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Stemplayer Native";
+    preferred-width: 780px;
+    preferred-height: 620px;
+    min-width: 560px;
+    min-height: 520px;
+    accessible-role: main;
+    accessible-label: "Stemplayer native player";
+
+    in property <string> source-name: "No source loaded";
+    in property <string> source-summary: "";
+    in property <string> state-text: "Empty";
+    in property <string> time-text: "0:00 / 0:00";
+    in property <string> output-mode: "Stem mix";
+    in property <string> device-name: "System default";
+    in property <string> waveform-text: "Waveform unavailable";
+    in property <string> error-text: "";
+    in property <bool> can-open: true;
+    in property <bool> can-play: false;
+    in property <bool> can-pause: false;
+    in property <bool> can-stop: false;
+    in property <bool> can-seek: false;
+    in property <bool> can-mix: false;
+    in-out property <float> drums-gain: 0;
+    in-out property <float> bass-gain: 0;
+    in-out property <float> other-gain: 0;
+    in-out property <float> vocals-gain: 0;
+    in-out property <bool> drums-muted: false;
+    in-out property <bool> bass-muted: false;
+    in-out property <bool> other-muted: false;
+    in-out property <bool> vocals-muted: false;
+    in-out property <bool> drums-soloed: false;
+    in-out property <bool> bass-soloed: false;
+    in-out property <bool> other-soloed: false;
+    in-out property <bool> vocals-soloed: false;
+    in-out property <float> seek-position: 0;
+    in-out property <bool> diagnostics-visible: false;
+    in-out property <bool> window-minimized <=> root.minimized;
+
+    callback open-source();
+    callback play();
+    callback pause();
+    callback stop();
+    callback seek(float);
+    callback set-gain(int, float);
+    callback commit-commands();
+    callback set-mute(int, bool);
+    callback set-solo(int, bool);
+    callback snapshot-tick();
+    callback reset-mix();
+    callback tick();
+
+    Timer {
+        interval: 33ms;
+        running: root.can-pause && !root.minimized;
+        triggered => { root.tick(); }
+    }
+    Timer {
+        interval: 250ms;
+        running: root.can-pause && !root.minimized;
+        triggered => { root.snapshot-tick(); }
+    }
+
+
+    shortcuts := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Space) {
+                if (root.can-pause) { root.pause(); }
+                else if (root.can-play) { root.play(); }
+                accept
+            } else {
+                reject
+            }
+        }
+        KeyBinding { keys: @keys(Control + O); enabled: root.can-open; activated => { root.open-source(); } }
+        KeyBinding {
+            keys: @keys(P);
+            activated => {
+                if (root.can-pause) { root.pause(); }
+                else if (root.can-play) { root.play(); }
+            }
+        }
+        KeyBinding { keys: @keys(S); enabled: root.can-stop; activated => { root.stop(); } }
+        KeyBinding { keys: @keys(R); enabled: root.can-mix; activated => { root.reset-mix(); } }
+        KeyBinding {
+            keys: @keys(LeftArrow);
+            enabled: root.can-seek;
+            activated => {
+                root.seek-position = max(0, root.seek-position - 0.05);
+                root.seek(root.seek-position);
+            }
+        }
+        KeyBinding {
+            keys: @keys(RightArrow);
+            enabled: root.can-seek;
+            activated => {
+                root.seek-position = min(1, root.seek-position + 0.05);
+                root.seek(root.seek-position);
+            }
+        }
+        KeyBinding { keys: @keys(D); activated => { root.diagnostics-visible = !root.diagnostics-visible; } }
+        KeyBinding { keys: @keys(Alt + "1"); enabled: root.can-mix; activated => { root.drums-muted = !root.drums-muted; root.set-mute(0, root.drums-muted); } }
+        KeyBinding { keys: @keys(Alt + "2"); enabled: root.can-mix; activated => { root.bass-muted = !root.bass-muted; root.set-mute(1, root.bass-muted); } }
+        KeyBinding { keys: @keys(Alt + "3"); enabled: root.can-mix; activated => { root.other-muted = !root.other-muted; root.set-mute(2, root.other-muted); } }
+        KeyBinding { keys: @keys(Alt + "4"); enabled: root.can-mix; activated => { root.vocals-muted = !root.vocals-muted; root.set-mute(3, root.vocals-muted); } }
+        KeyBinding { keys: @keys(Alt + Shift + "1"); enabled: root.can-mix; activated => { root.drums-soloed = !root.drums-soloed; root.set-solo(0, root.drums-soloed); } }
+        KeyBinding { keys: @keys(Alt + Shift + "2"); enabled: root.can-mix; activated => { root.bass-soloed = !root.bass-soloed; root.set-solo(1, root.bass-soloed); } }
+        KeyBinding { keys: @keys(Alt + Shift + "3"); enabled: root.can-mix; activated => { root.other-soloed = !root.other-soloed; root.set-solo(2, root.other-soloed); } }
+        KeyBinding { keys: @keys(Alt + Shift + "4"); enabled: root.can-mix; activated => { root.vocals-soloed = !root.vocals-soloed; root.set-solo(3, root.vocals-soloed); } }
+
+
+    VerticalBox {
+        padding: 14px;
+        spacing: 8px;
+
+        HorizontalBox {
+            spacing: 8px;
+            Button {
+                text: "Open";
+                primary: true;
+                enabled: root.can-open;
+                accessible-label: "Open source";
+                clicked => { root.open-source(); }
+            }
+            VerticalBox {
+                spacing: 2px;
+                Text { text: root.source-name; font-size: 18px; font-weight: 600; }
+                Text { text: root.source-summary; color: Palette.foreground.with-alpha(0.7); }
+            }
+            Text {
+                text: root.state-text;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+
+        if root.error-text != "": Rectangle {
+            height: 38px;
+            background: #8f2525;
+            accessible-label: root.error-text;
+            accessible-role: text;
+            Text {
+                text: root.error-text;
+                color: white;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+
+        Rectangle {
+            height: 118px;
+            background: Palette.alternate-background;
+            border-color: Palette.border;
+            border-width: 1px;
+            accessible-role: image;
+            accessible-label: root.waveform-text;
+
+            VerticalBox {
+                padding: 12px;
+                spacing: 7px;
+                Text {
+                    text: root.waveform-text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                seek-slider := Slider {
+                    minimum: 0;
+                    maximum: 1;
+                    value <=> root.seek-position;
+                    enabled: root.can-seek;
+                    accessible-label: "Playback position";
+                    released(value) => { root.seek(value); }
+                }
+            }
+            drop-target := DropArea {
+                width: parent.width;
+                height: 60px;
+                can-drop(event) => { event.proposed-action }
+                dropped(event) => {
+                    root.open-source();
+                    event.proposed-action
+                }
+            }
+        }
+
+        MixerRow {
+            role-index: 0; role-name: "Drums"; gain <=> root.drums-gain; enabled: root.can-mix;
+            muted <=> root.drums-muted; soloed <=> root.drums-soloed;
+            gain-changed(value) => { root.set-gain(0, value); }
+            gain-commit => { root.commit-commands(); }
+            mute-changed(value) => { root.set-mute(0, value); }
+            solo-changed(value) => { root.set-solo(0, value); }
+        }
+        MixerRow {
+            role-index: 1; role-name: "Bass"; gain <=> root.bass-gain; enabled: root.can-mix;
+            muted <=> root.bass-muted; soloed <=> root.bass-soloed;
+            gain-changed(value) => { root.set-gain(1, value); }
+            gain-commit => { root.commit-commands(); }
+            mute-changed(value) => { root.set-mute(1, value); }
+            solo-changed(value) => { root.set-solo(1, value); }
+        }
+        MixerRow {
+            role-index: 2; role-name: "Other"; gain <=> root.other-gain; enabled: root.can-mix;
+            muted <=> root.other-muted; soloed <=> root.other-soloed;
+            gain-changed(value) => { root.set-gain(2, value); }
+            gain-commit => { root.commit-commands(); }
+            mute-changed(value) => { root.set-mute(2, value); }
+            solo-changed(value) => { root.set-solo(2, value); }
+        }
+        MixerRow {
+            role-index: 3; role-name: "Vocals"; gain <=> root.vocals-gain; enabled: root.can-mix;
+            muted <=> root.vocals-muted; soloed <=> root.vocals-soloed;
+            gain-changed(value) => { root.set-gain(3, value); }
+            gain-commit => { root.commit-commands(); }
+            mute-changed(value) => { root.set-mute(3, value); }
+            solo-changed(value) => { root.set-solo(3, value); }
+        }
+
+        HorizontalBox {
+            spacing: 7px;
+            Button { text: "Play"; enabled: root.can-play; clicked => { root.play(); } }
+            Button { text: "Pause"; enabled: root.can-pause; clicked => { root.pause(); } }
+            Button { text: "Stop"; enabled: root.can-stop; clicked => { root.stop(); } }
+            Button { text: "Reset"; enabled: root.can-mix; clicked => { root.reset-mix(); } }
+            Text { text: root.time-text; vertical-alignment: center; }
+            Text { text: root.output-mode; vertical-alignment: center; horizontal-alignment: right; }
+        }
+
+        HorizontalBox {
+            spacing: 7px;
+            Button { text: root.device-name; accessible-label: "Output device " + root.device-name; }
+            Button {
+                text: "Diagnostics";
+                checkable: true;
+                checked <=> root.diagnostics-visible;
+                clicked => { root.diagnostics-visible = self.checked; }
+            }
+        }
+
+        if root.diagnostics-visible: Rectangle {
+            height: 42px;
+            background: Palette.alternate-background;
+            border-color: Palette.border;
+            border-width: 1px;
+            accessible-role: groupbox;
+            accessible-label: "Diagnostics";
+            Text {
+                text: root.state-text + " | " + root.output-mode;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+    }

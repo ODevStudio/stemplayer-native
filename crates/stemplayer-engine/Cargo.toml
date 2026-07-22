@@ -1,0 +1,26 @@
+[package]
+name = "stemplayer-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = []
+fake-decoder = ["stemplayer-decode/fake-decoder"]
+fake-output = ["stemplayer-output/fake-output"]
+
+[dependencies]
+stemplayer-decode.workspace = true
+stemplayer-domain.workspace = true
+stemplayer-format.workspace = true
+stemplayer-mixer.workspace = true
+stemplayer-output.workspace = true
+stemplayer-timeline.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "stemplayer-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = []
+local-wav = ["stemplayer-format/local-wav"]
+local-mp4 = ["stemplayer-format/local-mp4"]
+aac = ["stemplayer-decode/aac", "local-mp4"]
+alac = ["stemplayer-decode/alac", "local-mp4"]
+hls = ["stemplayer-network/hls"]
+
+[dependencies]
+serde_json.workspace = true
+stemplayer-decode.workspace = true
+stemplayer-domain.workspace = true
+stemplayer-format.workspace = true
+stemplayer-network.workspace = true
+
+[lints]
+workspace = true

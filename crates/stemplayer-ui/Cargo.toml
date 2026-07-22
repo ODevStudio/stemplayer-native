@@ -1,0 +1,19 @@
+[package]
+name = "stemplayer-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = []
+diagnostics-ui = []
+development = ["dep:stemplayer-mixer"]
+
+[dependencies]
+stemplayer-domain.workspace = true
+stemplayer-mixer = { workspace = true, optional = true }
+
+[lints]
+workspace = true

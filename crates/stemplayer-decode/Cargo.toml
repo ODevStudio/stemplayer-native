@@ -1,0 +1,20 @@
+[package]
+name = "stemplayer-decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = []
+aac = []
+alac = []
+fake-decoder = []
+
+[dependencies]
+stemplayer-domain.workspace = true
+stemplayer-format.workspace = true
+
+[lints]
+workspace = true
