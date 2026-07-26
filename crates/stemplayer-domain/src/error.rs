@@ -26,6 +26,82 @@ pub enum ErrorCode {
     CommandQueueFull,
     #[serde(rename = "E_TIMESCALE_INVALID")]
     TimelineInvalid,
+    #[serde(rename = "E_CONTAINER_NOT_MP4")]
+    ContainerNotMp4,
+    #[serde(rename = "E_CONTAINER_MALFORMED")]
+    ContainerMalformed,
+    #[serde(rename = "E_NOT_A_STEM_FILE")]
+    NotAStemFile,
+    #[serde(rename = "E_TRACK_COUNT_UNSUPPORTED")]
+    TrackCountUnsupported,
+    #[serde(rename = "E_TRACK_ROLE_AMBIGUOUS")]
+    TrackRoleAmbiguous,
+    #[serde(rename = "E_METADATA_MALFORMED")]
+    MetadataMalformed,
+    #[serde(rename = "E_METADATA_TOO_LARGE")]
+    MetadataTooLarge,
+    #[serde(rename = "E_EDIT_LIST_UNSUPPORTED")]
+    EditListUnsupported,
+    #[serde(rename = "E_EDIT_LIST_CONFLICT")]
+    EditListConflict,
+    #[serde(rename = "E_PRESENTATION_RANGE_INVALID")]
+    PresentationRangeInvalid,
+    #[serde(rename = "E_CODEC_UNSUPPORTED")]
+    CodecUnsupported,
+    #[serde(rename = "E_CODEC_CONFIG_INVALID")]
+    CodecConfigInvalid,
+    #[serde(rename = "E_DEMUX_FAILED")]
+    DemuxFailed,
+    #[serde(rename = "E_ENCODED_SAMPLE_INVALID")]
+    EncodedSampleInvalid,
+    #[serde(rename = "E_DECODE_FAILED")]
+    DecodeFailed,
+    #[serde(rename = "E_AUDIO_DATA_INVALID")]
+    AudioDataInvalid,
+    #[serde(rename = "E_TRACK_CONFIGURATION_MISMATCH")]
+    TrackConfigurationMismatch,
+    #[serde(rename = "E_NO_AUDIO_TRACKS")]
+    NoAudioTracks,
+    #[serde(rename = "E_MANIFEST_INVALID")]
+    ManifestInvalid,
+    #[serde(rename = "E_MANIFEST_VERSION_UNSUPPORTED")]
+    ManifestVersionUnsupported,
+    #[serde(rename = "E_MANIFEST_TOO_LARGE")]
+    ManifestTooLarge,
+    #[serde(rename = "E_MANIFEST_ROLE_MISSING")]
+    ManifestRoleMissing,
+    #[serde(rename = "E_MANIFEST_ROLE_DUPLICATE")]
+    ManifestRoleDuplicate,
+    #[serde(rename = "E_MANIFEST_FILE_MISSING")]
+    ManifestFileMissing,
+    #[serde(rename = "E_MANIFEST_FILE_AMBIGUOUS")]
+    ManifestFileAmbiguous,
+    #[serde(rename = "E_MANIFEST_PATH_UNSAFE")]
+    ManifestPathUnsafe,
+    #[serde(rename = "E_MANIFEST_SHA256_MISMATCH")]
+    ManifestSha256Mismatch,
+    #[serde(rename = "E_WAV_NOT_RIFF")]
+    WavNotRiff,
+    #[serde(rename = "E_WAV_MALFORMED")]
+    WavMalformed,
+    #[serde(rename = "E_WAV_FORMAT_UNSUPPORTED")]
+    WavFormatUnsupported,
+    #[serde(rename = "E_WAV_CHANNELS_UNSUPPORTED")]
+    WavChannelsUnsupported,
+    #[serde(rename = "E_WAV_SAMPLE_RATE_MISMATCH")]
+    WavSampleRateMismatch,
+    #[serde(rename = "E_WAV_FRAME_COUNT_MISMATCH")]
+    WavFrameCountMismatch,
+    #[serde(rename = "E_WAV_BLOCK_ALIGN_INVALID")]
+    WavBlockAlignInvalid,
+    #[serde(rename = "E_WAV_DATA_TRUNCATED")]
+    WavDataTruncated,
+    #[serde(rename = "E_WAV_PCM_INVALID")]
+    WavPcmInvalid,
+    #[serde(rename = "E_BUNDLE_INCONSISTENT")]
+    BundleInconsistent,
+    #[serde(rename = "E_BUNDLE_ABORTED")]
+    BundleAborted,
     #[serde(rename = "E_VALUE_OUT_OF_RANGE")]
     ValueOutOfRange,
     #[serde(rename = "E_INTERNAL")]
@@ -33,7 +109,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 49] = [
         Self::TransportStateInvalid,
         Self::PlaybackSessionClosed,
         Self::PlaybackNotReady,
@@ -42,7 +118,45 @@ impl ErrorCode {
         Self::MixerGainInvalid,
         Self::MixerMasterUnavailable,
         Self::TimelineInvalid,
+        Self::ContainerNotMp4,
+        Self::ContainerMalformed,
+        Self::NotAStemFile,
+        Self::TrackCountUnsupported,
+        Self::TrackRoleAmbiguous,
+        Self::MetadataMalformed,
+        Self::MetadataTooLarge,
+        Self::EditListUnsupported,
+        Self::EditListConflict,
+        Self::PresentationRangeInvalid,
+        Self::CodecUnsupported,
+        Self::CodecConfigInvalid,
+        Self::DemuxFailed,
+        Self::EncodedSampleInvalid,
+        Self::DecodeFailed,
+        Self::AudioDataInvalid,
+        Self::TrackConfigurationMismatch,
+        Self::NoAudioTracks,
         Self::CommandQueueFull,
+        Self::ManifestInvalid,
+        Self::ManifestVersionUnsupported,
+        Self::ManifestTooLarge,
+        Self::ManifestRoleMissing,
+        Self::ManifestRoleDuplicate,
+        Self::ManifestFileMissing,
+        Self::ManifestFileAmbiguous,
+        Self::ManifestPathUnsafe,
+        Self::ManifestSha256Mismatch,
+        Self::WavNotRiff,
+        Self::WavMalformed,
+        Self::WavFormatUnsupported,
+        Self::WavChannelsUnsupported,
+        Self::WavSampleRateMismatch,
+        Self::WavFrameCountMismatch,
+        Self::WavBlockAlignInvalid,
+        Self::WavDataTruncated,
+        Self::WavPcmInvalid,
+        Self::BundleInconsistent,
+        Self::BundleAborted,
         Self::ValueOutOfRange,
         Self::Internal,
     ];
@@ -57,9 +171,47 @@ impl ErrorCode {
             Self::MixerGainInvalid => "E_MIXER_GAIN_INVALID",
             Self::MixerMasterUnavailable => "E_MIXER_MASTER_UNAVAILABLE",
             Self::CommandQueueFull => "E_COMMAND_QUEUE_FULL",
+            Self::TimelineInvalid => "E_TIMESCALE_INVALID",
+            Self::ContainerNotMp4 => "E_CONTAINER_NOT_MP4",
+            Self::ContainerMalformed => "E_CONTAINER_MALFORMED",
+            Self::NotAStemFile => "E_NOT_A_STEM_FILE",
+            Self::TrackCountUnsupported => "E_TRACK_COUNT_UNSUPPORTED",
+            Self::TrackRoleAmbiguous => "E_TRACK_ROLE_AMBIGUOUS",
+            Self::MetadataMalformed => "E_METADATA_MALFORMED",
+            Self::MetadataTooLarge => "E_METADATA_TOO_LARGE",
+            Self::EditListUnsupported => "E_EDIT_LIST_UNSUPPORTED",
+            Self::EditListConflict => "E_EDIT_LIST_CONFLICT",
+            Self::PresentationRangeInvalid => "E_PRESENTATION_RANGE_INVALID",
+            Self::CodecUnsupported => "E_CODEC_UNSUPPORTED",
+            Self::CodecConfigInvalid => "E_CODEC_CONFIG_INVALID",
+            Self::DemuxFailed => "E_DEMUX_FAILED",
+            Self::EncodedSampleInvalid => "E_ENCODED_SAMPLE_INVALID",
+            Self::DecodeFailed => "E_DECODE_FAILED",
+            Self::AudioDataInvalid => "E_AUDIO_DATA_INVALID",
+            Self::TrackConfigurationMismatch => "E_TRACK_CONFIGURATION_MISMATCH",
+            Self::NoAudioTracks => "E_NO_AUDIO_TRACKS",
+            Self::ManifestInvalid => "E_MANIFEST_INVALID",
+            Self::ManifestVersionUnsupported => "E_MANIFEST_VERSION_UNSUPPORTED",
+            Self::ManifestTooLarge => "E_MANIFEST_TOO_LARGE",
+            Self::ManifestRoleMissing => "E_MANIFEST_ROLE_MISSING",
+            Self::ManifestRoleDuplicate => "E_MANIFEST_ROLE_DUPLICATE",
+            Self::ManifestFileMissing => "E_MANIFEST_FILE_MISSING",
+            Self::ManifestFileAmbiguous => "E_MANIFEST_FILE_AMBIGUOUS",
+            Self::ManifestPathUnsafe => "E_MANIFEST_PATH_UNSAFE",
+            Self::ManifestSha256Mismatch => "E_MANIFEST_SHA256_MISMATCH",
+            Self::WavNotRiff => "E_WAV_NOT_RIFF",
+            Self::WavMalformed => "E_WAV_MALFORMED",
+            Self::WavFormatUnsupported => "E_WAV_FORMAT_UNSUPPORTED",
+            Self::WavChannelsUnsupported => "E_WAV_CHANNELS_UNSUPPORTED",
+            Self::WavSampleRateMismatch => "E_WAV_SAMPLE_RATE_MISMATCH",
+            Self::WavFrameCountMismatch => "E_WAV_FRAME_COUNT_MISMATCH",
+            Self::WavBlockAlignInvalid => "E_WAV_BLOCK_ALIGN_INVALID",
+            Self::WavDataTruncated => "E_WAV_DATA_TRUNCATED",
+            Self::WavPcmInvalid => "E_WAV_PCM_INVALID",
+            Self::BundleInconsistent => "E_BUNDLE_INCONSISTENT",
+            Self::BundleAborted => "E_BUNDLE_ABORTED",
             Self::ValueOutOfRange => "E_VALUE_OUT_OF_RANGE",
             Self::Internal => "E_INTERNAL",
-            Self::TimelineInvalid => "E_TIMESCALE_INVALID",
         }
     }
 
@@ -73,6 +225,44 @@ impl ErrorCode {
             | Self::CommandQueueFull => ErrorCategory::Lifecycle,
             Self::MixerGainInvalid | Self::MixerMasterUnavailable => ErrorCategory::Mixer,
             Self::TimelineInvalid => ErrorCategory::Timeline,
+            Self::ContainerNotMp4
+            | Self::ContainerMalformed
+            | Self::NotAStemFile
+            | Self::TrackCountUnsupported
+            | Self::TrackRoleAmbiguous
+            | Self::MetadataMalformed
+            | Self::MetadataTooLarge
+            | Self::EditListUnsupported
+            | Self::EditListConflict
+            | Self::PresentationRangeInvalid
+            | Self::CodecUnsupported
+            | Self::CodecConfigInvalid
+            | Self::DemuxFailed
+            | Self::EncodedSampleInvalid
+            | Self::DecodeFailed
+            | Self::AudioDataInvalid
+            | Self::TrackConfigurationMismatch
+            | Self::NoAudioTracks
+            | Self::ManifestInvalid
+            | Self::ManifestVersionUnsupported
+            | Self::ManifestTooLarge
+            | Self::ManifestRoleMissing
+            | Self::ManifestRoleDuplicate
+            | Self::ManifestFileMissing
+            | Self::ManifestFileAmbiguous
+            | Self::ManifestPathUnsafe
+            | Self::ManifestSha256Mismatch
+            | Self::WavNotRiff
+            | Self::WavMalformed
+            | Self::WavFormatUnsupported
+            | Self::WavChannelsUnsupported
+            | Self::WavSampleRateMismatch
+            | Self::WavFrameCountMismatch
+            | Self::WavBlockAlignInvalid
+            | Self::WavDataTruncated
+            | Self::WavPcmInvalid
+            | Self::BundleInconsistent
+            | Self::BundleAborted => ErrorCategory::Source,
             Self::ValueOutOfRange | Self::Internal => ErrorCategory::Internal,
         }
     }
@@ -84,6 +274,7 @@ pub enum ErrorCategory {
     Lifecycle,
     Mixer,
     Timeline,
+    Source,
     Internal,
 }
 

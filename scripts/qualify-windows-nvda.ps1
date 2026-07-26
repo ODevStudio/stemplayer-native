@@ -4,7 +4,8 @@ param(
     [string]$OutputDirectory = "artifacts/phase0/windows-nvda",
     [string]$BinaryPath = "target/release/stemplayer-phase0-probe.exe",
     [string]$CargoArguments = "--release --locked",
-    [string]$UiArguments = "--ui-smoke 120"
+    [string]$UiArguments = "--ui-smoke 120",
+    [string[]]$Required = @("Drums gain", "Bass gain", "Other gain", "Vocals gain", "Play", "Stop")
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,8 +61,7 @@ try {
         [Windows.Automation.TreeScope]::Descendants,
         [Windows.Automation.Condition]::TrueCondition
     )
-    $required = @("Drums gain", "Bass gain", "Other gain", "Vocals gain", "Play", "Stop")
-    foreach ($name in $required) {
+    foreach ($name in $Required) {
         $element = $elements | Where-Object { $_.Current.Name -eq $name } | Select-Object -First 1
         if (-not $element) {
             throw "Accessible control missing: $name"
@@ -74,13 +74,13 @@ try {
     Stop-Nvda
     $speech = @(Get-Content -Path $log | Where-Object { $_ -match '^Speaking \[' })
     $announced = @(
-        foreach ($name in $required) {
+        foreach ($name in $Required) {
             if ($speech | Where-Object { $_ -like "*'$name'*" }) {
                 $name
             }
         }
     )
-    $missing = @($required | Where-Object { $_ -notin $announced })
+    $missing = @($Required | Where-Object { $_ -notin $announced })
     $passed = $missing.Count -eq 0
     $nvdaVersion = (Get-Item $NvdaPath).VersionInfo.ProductVersion
     $report = [pscustomobject][ordered]@{
@@ -89,7 +89,7 @@ try {
         timestamp_utc = [DateTime]::UtcNow.ToString("o")
         nvda_version = $nvdaVersion
         nvda_sha256 = (Get-FileHash -Algorithm SHA256 $NvdaPath).Hash.ToLowerInvariant()
-        required_announcements = $required
+        required_announcements = $Required
         announced = $announced
         missing = $missing
         limitations = @(

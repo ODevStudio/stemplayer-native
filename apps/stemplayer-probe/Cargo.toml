@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
-default = []
+default = ["local-wav"]
 local-wav = ["stemplayer-format/local-wav"]
 local-mp4 = ["stemplayer-format/local-mp4"]
 aac = ["stemplayer-decode/aac", "local-mp4"]
@@ -18,6 +18,9 @@ hls = ["stemplayer-network/hls"]
 serde_json.workspace = true
 stemplayer-decode.workspace = true
 stemplayer-domain.workspace = true
+stemplayer-engine.workspace = true
+stemplayer-output.workspace = true
+stemplayer-platform.workspace = true
 stemplayer-format.workspace = true
 stemplayer-network.workspace = true
 

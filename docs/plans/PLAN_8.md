@@ -212,3 +212,125 @@ Use fake and real engine backends. Fake tests provide determinism; a smaller rea
 ## Exit gate
 
 Phase 8 is complete when Windows users can perform every local playback and mixer task through a fully native, accessible, event-driven UI; errors are recoverable; settings are safe; and the UI stays within idle and playback overhead budgets. Native macOS/Linux UI qualification is optional Phase 12 work.
+
+## Implementation record
+
+### 2026-07-26 - Percentage gain controls and bounded desktop layout
+
+Status: in progress.
+
+Implemented:
+
+- Matched the web player's nonlinear fader curve from -60 through +6 dB while keeping the engine's validated dB contract unchanged.
+- Added visible linear-gain percentage values for every stem, including exact 0%, 100%, and 200% endpoint behavior and a per-stem 100% reset affordance.
+- Added bounded validation for UI fader positions and regression coverage for silence, attenuation, unity, boost, non-finite input, and out-of-range input.
+- Changed the Windows application executable to the native GUI subsystem so direct launches do not create a Windows Terminal or console window.
+- Capped the player content at 920 by 640 logical pixels and centered it in larger windows. Slint retains DPI-aware physical scaling while maximized windows no longer enlarge the controls without limit.
+
+Verification:
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Workspace regression | `cargo test --workspace -q` | PASS, 116 passed and 4 environment-gated tests ignored |
+| Lints | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| Development UI build | `cargo build -p stemplayer --no-default-features --features development` | PASS |
+| Production release build | `cargo build --release -p stemplayer` | PASS |
+| Windows executable subsystem | Parsed the release PE optional header; subsystem value 2 (`IMAGE_SUBSYSTEM_WINDOWS_GUI`) | PASS |
+| Native visual check | Normal window and maximized 1707 by 960 desktop inspection | PASS, percentage controls remain legible and the maximized content stays centered and bounded |
+| Accessibility tree | Mixer sliders expose gain labels; value buttons expose 100 percent reset names | PASS |
+
+Pending:
+
+- Complete the remaining Phase 8 source workflows, settings, recovery UX, device transitions, accessibility qualification, UI automation, and resource evidence.
+- Do not mark the Phase 8 exit gate passed until every listed work package and exit-gate requirement is complete.
+
+### 2026-07-26 - Versioned preference persistence and device restoration
+
+Status: in progress.
+
+Implemented:
+
+- Added settings writes that create the configuration directory, reject unsupported schema versions, and retain the existing corruption-recovery behavior.
+- Persisted diagnostics visibility on clean application shutdown without storing source or mixer state.
+- Persisted explicit output-device preference when changed.
+- Restored an available saved output device at startup and fell back to the system default when the saved device is missing.
+- Added focused regression coverage for settings round trips, unsupported schema rejection, and missing-device fallback.
+
+Verification:
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Focused settings and app tests | `cargo test -p stemplayer-platform -p stemplayer` | PASS, 8 passed and 1 hardware-gated test ignored |
+| Workspace regression | `cargo test --workspace -q` | PASS, 118 passed and 4 environment-gated tests ignored |
+| Lints | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| Development UI build | `cargo build -p stemplayer --no-default-features --features development` | PASS |
+| Production release build | `cargo build --release -p stemplayer` | PASS |
+
+Pending:
+
+- Add window placement, theme, cache, and recent-source preferences only with their corresponding Phase 8 UI workflows.
+- Complete source workflows, recovery UX, accessibility qualification, UI automation, and resource evidence before marking the Phase 8 exit gate passed.
+
+### 2026-07-26 - Complete native interaction model and Windows qualification
+
+Status: exit gate passed.
+
+Implemented:
+
+- Added explicit native entry points for stem containers, Studio manifests, and Studio folders, plus winit file/folder drop handling.
+- Added a bounded eight-entry recent-source list that can be disabled or cleared. Disabling it also removes stored paths.
+- Kept transport and all four mixer rows controller-driven, with committed seek-on-release, coalesced gain input, keyboard shortcuts, exact unity reset, mute, solo, reset-all, and master availability.
+- Added native output-device selection, saved-device restoration with default fallback, and visible source/output sample rates.
+- Completed schema-versioned settings for safe window size and on-screen placement, system/light/dark theme, output preference, diagnostics visibility, waveform-cache preference and limit, and recent-source behavior. Mixer state and loaded-source metadata remain transient.
+- Added recoverable error presentation with playback/source status, stable support code, redacted bounded details, retry, source selection, reset, and expandable details.
+- Added bounded scrolling for unusually short work areas without reducing control or text size. Windows display scaling remains authoritative; qualification ran at the configured 225% scale without an application override.
+- Added deterministic development modes and Windows UI Automation for open, transport, seek, mixer controls, master present/absent, device recovery, settings persistence, compact layout, Unicode/long names, minimize/restore, and close during playback.
+- Added reproducible UI resource qualification using Slint's lazy repaint metrics. Idle and minimized states stop repainting and the process tree contains no browser runtime.
+- Extended the existing NVDA harness with a configurable announcement set and qualified Phase 8 source, transport, gain, mute, solo, and error-recovery controls.
+
+Decisions:
+
+- The waveform-cache controls persist only the Phase 8 preference and size limit. Cache storage and eviction remain Phase 9 work.
+- No latency mode was exposed because it has not been qualified.
+- Window position is restored only when its saved origin belongs to a current monitor; otherwise Windows chooses a safe placement.
+- Compact layouts scroll instead of overriding Windows scale or shrinking controls.
+
+Verification:
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Formatting | `cargo fmt --all -- --check` | PASS |
+| Workspace regression | `cargo test --workspace -q` | PASS, 122 passed and 4 environment-gated tests ignored |
+| Lints | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| Production release build | `cargo build --release -q -p stemplayer` | PASS |
+| Windows native UI automation | `scripts/qualify-phase8-windows-ui.ps1` | PASS at 225% Windows scale |
+| Screen reader, core tasks | `scripts/qualify-windows-nvda.ps1` with the Phase 8 player and core announcement set | PASS, NVDA 2026.1.1 announced all 7 required controls |
+| Screen reader, recovery | `scripts/qualify-windows-nvda.ps1` with `--ui-error` | PASS, NVDA announced all 4 recovery controls |
+| Resource qualification | `scripts/measure-phase8-windows.ps1` | PASS |
+| Settings corruption/migration | `stemplayer-platform` settings tests | PASS |
+| Real controller wiring | `stemplayer` controller tests | PASS, including load/seek/stop, mixer reset, device-rate change, and bounded shutdown |
+
+Resource evidence:
+
+| Scenario | Steady max private bytes | Average CPU, one core | Repaints per second |
+| --- | ---: | ---: | ---: |
+| Ready idle | 14,200,832 | 0% | 0 |
+| Playing UI with deterministic mock | 14,245,888 | 0.298% | 4 |
+| Playing minimized | 14,114,816 | 0% | 0 |
+| Paused minimized | 14,188,544 | 0% | 0 |
+
+Artifacts:
+
+- `stemplayer-native/artifacts/phase8/windows/ui-qualification.json`
+- `stemplayer-native/artifacts/phase8/windows/resource-report.json`
+- `stemplayer-native/artifacts/phase8/windows/compact.png`
+- `stemplayer-native/artifacts/phase8/windows/large-text-unicode.png`
+- `stemplayer-native/artifacts/phase8/windows-nvda-core/nvda-qualification.json`
+- `stemplayer-native/artifacts/phase8/windows-nvda-error/nvda-qualification.json`
+
+Exit-gate conclusion:
+
+- Windows local playback and mixer tasks are available through a native, keyboard-operable, screen-reader-exposed UI.
+- Error recovery and preferences are bounded and safe.
+- Idle/minimized repaint, CPU, memory, and process-tree gates pass.
+- Phase 8 passes. Phase 9 may begin.

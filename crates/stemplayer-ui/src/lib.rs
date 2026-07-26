@@ -9,7 +9,10 @@ mod mock;
 
 pub use command_adapter::CommandAdapter;
 pub use playhead::Playhead;
-pub use presentation::{MixerRow, PresentationModel, TransportAvailability};
+pub use presentation::{
+    MixerRow, PresentationModel, TransportAvailability, gain_db_from_position,
+    gain_position_from_db,
+};
 
 #[cfg(feature = "development")]
 pub use mock::MockController;

@@ -1,5 +1,11 @@
 # Phase 3 — Native Audio Device and Real-Time Output Core
 
+## Progress
+
+- Status: exit gate passed (2026-07-22).
+- Phase 0 audio decisions, Phase 1 contracts, and the Phase 2 probe handoff were reviewed before implementation.
+- Scope remains limited to `stemplayer-native`; formats, mixer behavior, the webplayer, and the converter remain untouched.
+
 ## Goal
 
 Implement and qualify the platform audio-output layer independently of file formats and the product mixer. The result is a bounded, real-time-safe path from prepared stereo frames to the default or selected audio device.
@@ -187,3 +193,49 @@ Reports include negotiated configuration, callback sizes, underruns, overflows, 
 ## Exit gate
 
 Phase 3 is complete when Windows can play synthetic stereo audio through the selected WASAPI device with a proven allocation-free callback, bounded rings, stable lifecycle, recoverable device loss, and reproducible performance evidence. macOS and Linux remain unsupported until their optional Phase 12 native audio qualification passes.
+
+## Phase 3 execution record - 2026-07-22
+
+Status: exit gate passed.
+
+### Implemented checkpoint
+
+- Reused the Phase 0 decisions for CPAL 0.18.1 and rtrb 0.3.4; no additional dependency was introduced.
+- Added session-local output-device enumeration, default-device identification, capability reporting, stereo rejection, and deterministic Float32-first configuration negotiation.
+- Added a fixed-capacity stereo SPSC ring with generation-tagged reset, no overwrite, monotonic counters, occupancy tracking, explicit underflow/overflow counters, and reduced-width wraparound simulation.
+- Added callback-local Float32, Float64, signed-integer, and unsigned-integer conversion with explicit saturation and silence behavior.
+- Added the synthetic render worker, prefill, bounded full-ring sleep, immediate stop signal, callback-size/deadline counters, output clock model, and bounded device-loss lifecycle state.
+- Added `devices`, `output-test`, `callback-audit`, `device-reopen-test`, and `device-recovery-test` to `stemplayer-probe`.
+- Added a dedicated allocation-audit binary, practical WASAPI lifecycle qualification, CPU stress, memory sampling, context-switch sampling, and retained machine-readable artifacts.
+
+### Evidence at this checkpoint
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Focused tests | `cargo test --offline -p stemplayer-output -p stemplayer-probe` | PASS, 24 tests |
+| Workspace format | `cargo fmt --all -- --check` | PASS |
+| Workspace lint | `cargo clippy --offline --locked --all-targets --all-features -- -D warnings` | PASS |
+| Workspace tests | `cargo test --offline --locked --workspace --all-features` | PASS, 61 tests |
+| Dependency direction | `cargo tree --offline --locked -p stemplayer-output` | PASS, only CPAL, rtrb, serde, and domain at the direct boundary |
+| Forbidden coupling | exact output/probe scan | PASS, zero webplayer, Node.js, Python, FFmpeg, WebView, Electron, Tauri, AudioWorklet, or mixer references |
+| Callback kernel | `stemplayer-probe callback-audit` | PASS, 10,000 callbacks, 256 frames each, 0 underflows, 0 overflows, maximum observed callback 75,700 ns |
+| Fake lifecycle | output lifecycle tests | PASS, 10,000 open/close cycles, 0 failures |
+| Allocation proof | `stemplayer-callback-audit` | PASS, 100,000 callbacks, 256 frames each, 0 allocations |
+| Hardware reopen | `stemplayer-probe device-reopen-test` | PASS, 10 WASAPI open/play/close cycles, 0 failures, underruns, overflows, or stream errors |
+| Pause/resume | `stemplayer-probe output-test --seconds 5 --pause-cycles 20` | PASS, 20 WASAPI pause/resume cycles, 0 underruns, overflows, or stream errors |
+| CPU stress | `scripts/qualify-phase3-windows.ps1` | PASS, 15 CPU workers, 0 underruns, overflows, or stream errors |
+| One-hour soak | `scripts/qualify-phase3-windows.ps1 -SoakSeconds 3600` | PASS, 0 underruns, overflows, or stream errors; maximum callback 423,000 ns; private memory change -69,632 bytes |
+| Wakeup proxy | `scripts/measure-phase3-wakeups.ps1 -Seconds 10 -DeviceId device-2` | PASS, 5,780 context switches, 722.5 per second, 0 underruns |
+| Windows discovery | `stemplayer-probe devices` | PASS, five stereo-capable devices, one current default |
+| WASAPI smoke | `stemplayer-probe output-test --device device-2 --rate 48000 --seconds 2` | PASS, Float32 stereo, 201 callbacks, 0 underflows, 0 overflows, 0 stream errors, maximum observed callback 62,500 ns, 3 ms shutdown |
+| Active-device unplug recovery | `stemplayer-probe device-recovery-test --seconds 30` | PASS, iFi USB stream reported 1 error; Realtek recovery succeeded in 1 attempt with 0 stream errors; `fault_observed: true`; `recovered_paused: true` |
+| Dependency audit | `scripts/audit-dependencies.ps1 -OutputDirectory artifacts/phase3/dependencies` | PASS, 616 dependencies, 0 vulnerabilities, 0 unlicensed crates |
+| Qualification artifact | `artifacts/phase3/windows/qualification.json` | PASS |
+
+### Exit-gate result
+
+- Passed. The required Windows playback, allocation-free callback, bounded ring, stable lifecycle, recoverable device loss, and reproducible performance evidence are retained above. Suspend/resume is not part of this phase's exit gate and was not tested.
+
+### Limitations
+
+- Administrator policy blocked WPR CPU/audio ETW collection with error `0xc5585011`; process-thread context switches are retained as the available wakeup proxy.

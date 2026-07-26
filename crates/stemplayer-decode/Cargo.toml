@@ -13,8 +13,11 @@ alac = []
 fake-decoder = []
 
 [dependencies]
+serde.workspace = true
 stemplayer-domain.workspace = true
 stemplayer-format.workspace = true
+stemplayer-timeline.workspace = true
+symphonia.workspace = true
 
 [lints]
 workspace = true

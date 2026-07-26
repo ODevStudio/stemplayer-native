@@ -1,5 +1,6 @@
 use stemplayer_domain::{
-    Microseconds, OutputMode, PlayerSnapshot, SourceKind, StemRole, TransportState, WaveformState,
+    ErrorCode, GainDb, Microseconds, OutputMode, OutputPreference, PlayerError, PlayerSnapshot,
+    SourceKind, StemRole, TransportState, WaveformState,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +47,7 @@ pub struct MixerRow {
     pub role: StemRole,
     pub label: &'static str,
     pub gain_db: f32,
+    pub gain_position: f32,
     pub gain_text: String,
     pub muted: bool,
     pub solo: bool,
@@ -58,14 +60,22 @@ pub struct PresentationModel {
     pub current_time: String,
     pub total_time: String,
     pub mixer_rows: [MixerRow; 4],
-    pub output_mode: &'static str,
+    pub output_mode: String,
+    pub output_preference: i32,
+    pub has_master: bool,
     pub buffering_banner: Option<&'static str>,
     pub error_banner: Option<String>,
+    pub error_action: String,
+    pub error_code: String,
+    pub error_status: String,
+    pub error_details: String,
     pub file_name: String,
     pub source_summary: String,
     pub device_name: String,
+    pub output_rate_text: String,
     pub waveform_text: &'static str,
     pub diagnostics_count: usize,
+    pub diagnostics_text: String,
 }
 
 impl PresentationModel {
@@ -99,19 +109,47 @@ impl PresentationModel {
                 role: stem.role,
                 label: role_label(stem.role),
                 gain_db: stem.gain_db.get(),
-                gain_text: format!("{:+.1} dB", stem.gain_db.get()),
+                gain_position: gain_position_from_db(stem.gain_db),
+                gain_text: gain_percent_text(stem.gain_db),
                 muted: stem.muted,
                 solo: stem.solo,
             }),
-            output_mode: match details.mixer.output_mode {
-                OutputMode::MasterReference => "Master reference",
-                OutputMode::StemMix => "Stem mix",
+            output_mode: output_mode(details.mixer.output_preference, details.mixer.output_mode),
+            output_preference: match details.mixer.output_preference {
+                OutputPreference::Automatic => 0,
+                OutputPreference::MasterReference => 1,
+                OutputPreference::StemMix => 2,
             },
+            has_master: source.is_some_and(|value| value.has_master),
             buffering_banner: details.buffering.then_some("Buffering"),
             error_banner: details
                 .error
                 .as_ref()
                 .map(|error| error.summary.as_str().to_owned()),
+            error_action: details
+                .error
+                .as_ref()
+                .and_then(|error| error.user_action.as_ref())
+                .map_or_else(|| "Try again or choose another source".to_owned(), ToString::to_string),
+            error_code: details
+                .error
+                .as_ref()
+                .map_or_else(String::new, |error| error.code.as_str().to_owned()),
+            error_status: details.error.as_ref().map_or_else(String::new, |_| {
+                if source.is_some() {
+                    "Playback stopped; source remains loaded".to_owned()
+                } else {
+                    "Playback stopped; no source is loaded".to_owned()
+                }
+            }),
+            error_details: details.error.as_ref().map_or_else(String::new, |error| {
+                error
+                    .details
+                    .iter()
+                    .map(|detail| format!("{}={}", detail.key, detail.value))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }),
             file_name: source
                 .map(|value| value.display_name.as_str().to_owned())
                 .unwrap_or_else(|| "No source loaded".into()),
@@ -121,14 +159,80 @@ impl PresentationModel {
                 .as_ref()
                 .map(|value| value.as_str().to_owned())
                 .unwrap_or_else(|| "System default".into()),
+            output_rate_text: details.resampler.map_or_else(
+                || {
+                    source.map_or_else(
+                        || "Output rate unavailable".to_owned(),
+                        |source| format!("Output {} Hz", source.sample_rate.get()),
+                    )
+                },
+                |resampler| format!("Output {} Hz", resampler.output_rate),
+            ),
             waveform_text: match details.waveform {
                 WaveformState::Unavailable => "Waveform unavailable",
                 WaveformState::Analyzing => "Analyzing waveform",
                 WaveformState::Ready => "Waveform ready",
             },
             diagnostics_count: snapshot.diagnostics().len(),
+            diagnostics_text: details.source_diagnostics.as_ref().map_or_else(
+                || format!("{} | {}", state_text(snapshot.transport_state()), output_mode(details.mixer.output_preference, details.mixer.output_mode)),
+                |diagnostics| format!(
+                    "{} | {} | metadata {} B | media {} B | queue {} | seek {} packets, {} discarded frames, {} us",
+                    diagnostics.container,
+                    diagnostics.tracks,
+                    diagnostics.metadata_read_bytes,
+                    diagnostics.media_read_bytes,
+                    diagnostics.maximum_pending_blocks,
+                    diagnostics.seek_packet_count,
+                    diagnostics.seek_discarded_frames,
+                    diagnostics.seek_latency_us
+                ),
+            ),
         }
     }
+}
+
+pub fn gain_position_from_db(gain: GainDb) -> f32 {
+    let gain = gain.get();
+    if gain <= 0.0 {
+        800.0 * (1.0 - (-gain / 60.0).sqrt())
+    } else {
+        800.0 + gain / 6.0 * 200.0
+    }
+}
+
+pub fn gain_db_from_position(position: f32) -> Result<GainDb, PlayerError> {
+    if !position.is_finite() || !(0.0..=1_000.0).contains(&position) {
+        return Err(PlayerError::new(
+            ErrorCode::MixerGainInvalid,
+            "Gain position must be between 0 and 1000",
+        ));
+    }
+    let gain = if position <= 800.0 {
+        -60.0 * (1.0 - position / 800.0).powi(2)
+    } else {
+        (position - 800.0) / 200.0 * 6.0
+    };
+    GainDb::new((gain * 10.0).round() / 10.0)
+}
+
+fn gain_percent_text(gain: GainDb) -> String {
+    if gain == GainDb::SILENCE {
+        return "0%".to_owned();
+    }
+    format!("{}%", (gain.linear() * 100.0).round().max(1.0) as u16)
+}
+
+fn output_mode(preference: OutputPreference, mode: OutputMode) -> String {
+    let selection = match preference {
+        OutputPreference::Automatic => "Automatic",
+        OutputPreference::MasterReference | OutputPreference::StemMix => "Manual",
+    };
+    let mode = match mode {
+        OutputMode::MasterReference => "Master reference",
+        OutputMode::StemMix => "Stem mix",
+    };
+    format!("{selection}: {mode}")
 }
 
 fn format_time(value: Microseconds) -> String {
@@ -233,5 +337,43 @@ mod tests {
     fn time_format_is_stable() {
         assert_eq!(format_time(Microseconds::new(-1)), "0:00");
         assert_eq!(format_time(Microseconds::new(65_999_999)), "1:05");
+    }
+
+    #[test]
+    fn gain_scale_matches_the_web_player_and_reports_percent() {
+        for (gain, position, text) in [
+            (GainDb::SILENCE, 0.0, "0%"),
+            (GainDb::new(-15.0).unwrap(), 400.0, "18%"),
+            (GainDb::UNITY, 800.0, "100%"),
+            (GainDb::new(6.0).unwrap(), 1_000.0, "200%"),
+        ] {
+            assert_eq!(gain_position_from_db(gain), position);
+            assert_eq!(gain_db_from_position(position).unwrap(), gain);
+            assert_eq!(gain_percent_text(gain), text);
+        }
+        assert!(gain_db_from_position(f32::NAN).is_err());
+        assert!(gain_db_from_position(1_001.0).is_err());
+    }
+
+    #[test]
+    fn error_presentation_includes_action_code_and_redacted_details() {
+        let error = PlayerError::new(ErrorCode::ManifestInvalid, "Manifest is invalid")
+            .with_user_action("Choose another Studio bundle")
+            .with_details(vec![stemplayer_domain::ErrorDetail {
+                key: stemplayer_domain::BoundedText::new("role").unwrap(),
+                value: stemplayer_domain::BoundedText::new("vocals").unwrap(),
+            }])
+            .unwrap();
+        let snapshot = PlayerSnapshot::empty(TransportState::Error).with_details(
+            stemplayer_domain::SnapshotDetails {
+                error: Some(error),
+                ..stemplayer_domain::SnapshotDetails::default()
+            },
+        );
+        let model = PresentationModel::from_snapshot(&snapshot);
+        assert_eq!(model.error_code, "E_MANIFEST_INVALID");
+        assert_eq!(model.error_action, "Choose another Studio bundle");
+        assert_eq!(model.error_details, "role=vocals");
+        assert_eq!(model.error_status, "Playback stopped; no source is loaded");
     }
 }

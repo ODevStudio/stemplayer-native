@@ -30,12 +30,20 @@ linux-integration = ["stemplayer-platform/linux-integration"]
 
 [dependencies]
 slint.workspace = true
+serde_json.workspace = true
 stemplayer-decode.workspace = true
 stemplayer-domain.workspace = true
+stemplayer-engine.workspace = true
 stemplayer-format.workspace = true
 stemplayer-network.workspace = true
+stemplayer-output.workspace = true
 stemplayer-platform.workspace = true
+stemplayer-timeline.workspace = true
 stemplayer-ui.workspace = true
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+rfd.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

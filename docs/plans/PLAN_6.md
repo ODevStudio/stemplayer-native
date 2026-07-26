@@ -178,3 +178,61 @@ UI values are control state; effective values and mode come from engine snapshot
 ## Exit gate
 
 Phase 6 is complete when native playback reproduces all approved mixer semantics, A/B and gain changes are click-free and transport-neutral, arbitrary qualified device rates work through one post-mix stereo resampler, and render-path resource and timing budgets are met.
+
+## Implementation record
+
+### 2026-07-24 - Implementation resumed
+
+Status: exit gate passed.
+
+Implemented:
+
+- Added the fixed four-stem Float32 graph, exact gain endpoints, mute-over-solo semantics, 10 ms retargetable source-frame ramps, optional master reference, and complementary 20 ms A/B crossfades.
+- Kept A/B and gain automation transport-neutral. Seek, stop, replay, and device recreation prime the current mixer and resampler state deterministically.
+- Added one preallocated stereo `rubato` FFT resampler after the A/B bus. The source rate remains authoritative while the output device negotiates independently.
+- Added exact resampled end-frame accounting, delay and fractional-phase diagnostics, bounded buffers, non-finite sample rejection, peak diagnostics, and device-change discontinuity tracking.
+- Enabled native gain, mute, multi-solo, reset, and automatic/master/stem preference controls. Slider floods are coalesced before the bounded controller queue.
+- Recorded the resampler, dependency, and Float32 summation decision in `stemplayer-native/docs/decisions/phase6-post-mix-resampler.md`.
+
+Verification:
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Workspace tests | `rtk cargo test --workspace` | PASS, 104 passed and 2 ignored across 30 suites |
+| Lints and format | `rtk cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all -- --check` | PASS |
+| Release build | `rtk cargo build --release --locked -p stemplayer -p stemplayer-probe -p stemplayer-callback-audit` | PASS |
+| Mixer semantics | Golden state, every-role/channel impulse, mute/multi-solo, exact ramp, active retarget, complementary A/B, equal-bus unity, rapid automation, seek-prime, and last-frame tests | PASS |
+| Resampling | 44.1 to 48, 48 to 44.1, and 48 to 96 kHz; channel isolation; deterministic reset; one-hour frame math; exact 10/20 ms scaling | PASS |
+| Windows hardware | `scripts/qualify-phase6-windows.ps1`; 48 kHz source to 44.1 kHz iFi output | PASS, 1,440,000 source frames to exactly 1,323,000 device frames, 147-frame reported delay, zero underruns and overflows |
+| Active device-rate change | `rtk cargo test --release -p stemplayer active_device_rate_change_recreates_and_reprimes_output -- --ignored --nocapture` | PASS, switched to a non-default device with a different rate, re-primed once, recorded one discontinuity, and retained zero underruns and overflows |
+| Resource budgets | `artifacts/phase6/windows/resource-report.json` | PASS, 4.677% of one core p95 and 27,099,136 peak private bytes |
+| Render allocation and latency | `stemplayer-callback-audit.exe` | PASS, zero allocations in 100,000 callbacks and 1,000 mixer/resampler blocks; command-to-render p95 100 ns against 30 ms |
+| Dependency audit | `artifacts/phase6/dependencies/audit.json` | PASS, 0 vulnerabilities and 0 unlicensed crates in the 624-package locked graph |
+| Ubuntu headless | `artifacts/phase6/wsl-ubuntu/headless.json` | PASS, locked tests and metadata on Ubuntu 24.04 WSL2 |
+
+### 2026-07-24 - Native UI interaction corrections
+
+Corrected:
+
+- Stop now presents the authoritative zero-frame snapshot immediately instead of waiting for the next play tick.
+- Automatic, master reference, and stem mix are one exclusive radio group; diagnostics remains an independent checkbox.
+- Gain previews flush at a bounded 16 ms cadence while dragging and flush once more on release.
+- Reset updates the visible controls immediately, flushes any pending gain command, then submits the reset in queue order.
+- The output selector now enumerates native devices and submits the selected device identifier.
+
+Verification:
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Workspace regression | `cargo test --workspace` | PASS, 104 passed and 2 ignored |
+| Lints, format, and diff | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all -- --check`; `git diff --check` | PASS |
+| Release build and smoke | `rtk cargo build --release --locked -p stemplayer -p stemplayer-probe -p stemplayer-callback-audit`; `stemplayer.exe --ui-smoke 1000` | PASS |
+| Active device-rate change | `rtk cargo test --release -p stemplayer active_device_rate_change_recreates_and_reprimes_output -- --ignored --nocapture` | PASS |
+| Native UI regression | Stop playhead, exclusive modes, reset state, and output selector exercised in the Windows UI | PASS; operator confirmed output-device selection works |
+
+Listening qualification:
+
+- Operator confirmed click-free playback after exercising the native mixer controls and live output-device selection.
+- No channel-order, transport, or device-change artifacts were reported.
+
+The automated and listening gates are green. Phase 6 passed its exit gate; Phase 7 is active and not started.

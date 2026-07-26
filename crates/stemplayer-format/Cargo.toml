@@ -12,7 +12,11 @@ local-wav = []
 local-mp4 = []
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 stemplayer-domain.workspace = true
+unicode-normalization.workspace = true
 
 [lints]
 workspace = true

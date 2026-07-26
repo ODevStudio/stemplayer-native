@@ -212,3 +212,57 @@ Mixer controls may be visible but disabled or limited until Phase 6.
 ## Exit gate
 
 Phase 5 is complete when Studio WAV bundles play audibly and sample-synchronously from start to exact end, transport and seek behave deterministically, memory is duration-independent, normal-load playback has zero underruns, and stale work cannot affect the active session.
+
+## Implementation record
+
+### 2026-07-23 - Automated implementation and qualification complete
+
+Status: exit gate passed.
+
+Implemented:
+
+- Transactional PlaybackSession construction from validated Studio WAV bundles with exact rational duration, redacted identity, generation, channel layout, source handles, and fixed 1.5/3/6/12-second buffer policy.
+- One duration-independent synchronized block ring for all 8 or 10 source channels with common cursors, complete-block publication, wraparound, generation reset, stale rejection, and bounded metrics.
+- A single bounded decode scheduler. Requests are capped at 4096 frames per track, publication occurs only after every required role covers the same absolute range, and queue depth remains one block.
+- Generation-safe play, pause, stop, seek, replay-after-end, cancellation, exact exclusive-end detection, output drain, neutral master routing, and unity stem summing.
+- A CPAL DeviceOutput bridge with a fixed 8192-frame lock-free queue, batched producer/callback accounting, expected-drain handling, stale generation clearing, silence on underflow, and no decode work in the callback.
+- The real Studio controller and native Windows directory picker, including bounded commands, immediate shutdown signaling, coalesced authoritative snapshots, local UI playhead interpolation, and disabled Phase 6 mixer controls.
+- An internal --play-source qualification path and playback-sim probe for deterministic full-track runs.
+
+Performance decisions:
+
+- The controller services a roughly 186 ms output queue every 25 ms.
+- Authoritative snapshots publish once per second during steady playback; the UI interpolates the visible playhead at 500 ms.
+- Output-ring writes and callback counters are batched. This removed per-frame metric atomics and reduced measured playback CPU below the WAV budget.
+- rfd 0.15.4 is Windows-only with default features disabled. The security, license, and dependency decision is recorded in stemplayer-native/docs/decisions/phase5-native-folder-picker.md.
+
+Evidence:
+
+- Raw cargo test --workspace: 89 passed, 1 intentionally ignored qualification test.
+- Raw cargo clippy --workspace --all-targets -- -D warnings: passed.
+- Raw cargo fmt --all --check: passed.
+- The ignored release no-drift test passed 30-minute frame domains at both 44.1 and 48 kHz in 0.25 seconds.
+- A complete 30-second four-stem synthetic Studio bundle played through Lautsprecher (4- iFi (by AMR) HD+ USB Audio) to exact frame 1,323,000 and entered ENDED with zero underruns and zero overflows.
+- Windows release measurement: 4.655% of one logical core p95, 2.764% average, 23,445,504 peak private bytes, and 41,689,088 peak working set bytes.
+- The optimized binary is 12,060,672 bytes with SHA-256 ECB665C538369C0436C2242AE7C0BC39D50E7F94A7333EE0CC897ED6C0CB75B9.
+- Ubuntu 24.04 under WSL passed locked headless workspace tests. Raw report: stemplayer-native/artifacts/phase5/wsl-ubuntu/headless.json.
+- Windows raw measurement: stemplayer-native/artifacts/phase5/windows/resource-report.json.
+- Windows summary: stemplayer-native/artifacts/phase5/windows/qualification.json.
+- The user confirmed audible output through headphones.
+- A verified 8:32 real Studio bundle with four stems and master played all 22,583,610 frames, entered ENDED, selected master-reference routing, and reported zero underruns and zero overflows. Final snapshot: stemplayer-native/artifacts/phase5/windows/real-bundle-snapshot.json.
+
+Covered tests:
+
+- Exact first and last samples and exact exclusive end.
+- Pause/resume position preservation.
+- Stop reset and 500 generation-replacing seeks.
+- Ring wraparound, fixed capacity, stale generation rejection, and expected output drain.
+- Bounded source reads and fixed-duration-independent retained PCM.
+- Controller load/seek/stop without hardware and shutdown wakeup with a full command queue.
+- Real output complete-track drain with zero normal-load underruns.
+
+Exit-gate result:
+
+- Passed. Studio WAV bundles play audibly and sample-synchronously from start to exact end.
+- Transport, seek, cancellation, bounded memory, CPU, and zero-underrun requirements have automated evidence.
+- Phase 6 is now active with status not started.

@@ -1,0 +1,16 @@
+[package]
+name = "stemplayer-callback-audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+stemplayer-domain.workspace = true
+stemplayer-mixer.workspace = true
+stemplayer-output.workspace = true
+
+[lints]
+workspace = true

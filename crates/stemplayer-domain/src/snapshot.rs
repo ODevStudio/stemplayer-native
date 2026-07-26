@@ -1,6 +1,7 @@
 use crate::{
-    ChannelCount, DisplayName, ErrorCode, GainDb, GenerationId, OutputMode, PlaybackPosition,
-    PlayerError, PublicDiagnostic, SampleRate, SourceFrame, SourceKind, StemRole, TransportState,
+    BoundedText, ChannelCount, DisplayName, ErrorCode, GainDb, GenerationId, OutputMode,
+    OutputPreference, PlaybackPosition, PlayerError, PublicDiagnostic, SampleRate, SourceFrame,
+    SourceKind, StemRole, TransportState,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -38,18 +39,80 @@ impl StemSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationReason {
+    Gain,
+    Mute,
+    Solo,
+    Reset,
+    OutputPreference,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct MixerSnapshot {
     pub stems: [StemSnapshot; 4],
+    pub output_preference: OutputPreference,
     pub output_mode: OutputMode,
+    pub automation_count: u64,
+    pub crossfade_count: u64,
+    pub current_linear_gains: [f32; 4],
+    pub target_linear_gains: [f32; 4],
+    pub remaining_gain_frames: [u32; 4],
+    pub current_master_gain: f32,
+    pub target_master_gain: f32,
+    pub remaining_crossfade_frames: u32,
+    pub last_automation_reason: Option<AutomationReason>,
+    pub source_peak: [f32; 2],
+    pub output_peak: [f32; 2],
+    pub non_finite_samples: u64,
 }
 
 impl Default for MixerSnapshot {
     fn default() -> Self {
         Self {
             stems: StemRole::ALL.map(StemSnapshot::neutral),
+            output_preference: OutputPreference::Automatic,
             output_mode: OutputMode::StemMix,
+            automation_count: 0,
+            crossfade_count: 0,
+            current_linear_gains: [1.0; 4],
+            target_linear_gains: [1.0; 4],
+            remaining_gain_frames: [0; 4],
+            current_master_gain: 0.0,
+            target_master_gain: 0.0,
+            remaining_crossfade_frames: 0,
+            last_automation_reason: None,
+            source_peak: [0.0; 2],
+            output_peak: [0.0; 2],
+            non_finite_samples: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ResamplerSnapshot {
+    pub input_rate: u32,
+    pub output_rate: u32,
+    pub delay_frames: u32,
+    pub input_frames: u64,
+    pub output_frames: u64,
+    pub phase_numerator: u32,
+    pub phase_denominator: u32,
+    pub buffer_occupancy_frames: u32,
+    pub reset_count: u64,
+    pub discontinuity_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SourceDiagnostics {
+    pub container: BoundedText<32>,
+    pub tracks: BoundedText<1024>,
+    pub metadata_read_bytes: u64,
+    pub media_read_bytes: u64,
+    pub maximum_pending_blocks: u8,
+    pub seek_packet_count: u32,
+    pub seek_discarded_frames: u64,
+    pub seek_latency_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -66,6 +129,13 @@ pub struct SnapshotDetails {
     pub mixer: MixerSnapshot,
     pub device_name: Option<DisplayName>,
     pub buffering: bool,
+    pub buffered_source_frames: u64,
+    pub device_queue_frames: u64,
+    pub audio_stream_active: bool,
+    pub underrun_count: u64,
+    pub overflow_count: u64,
+    pub resampler: Option<ResamplerSnapshot>,
+    pub source_diagnostics: Option<SourceDiagnostics>,
     pub waveform: WaveformState,
     pub error: Option<PlayerError>,
 }

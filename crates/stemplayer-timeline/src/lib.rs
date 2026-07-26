@@ -1,5 +1,11 @@
 #![deny(unsafe_code)]
 
+mod mp4;
+
+pub use mp4::{
+    Mp4EditEntry, Mp4TrackTimeline, PresentationSegment, common_mp4_range, map_mp4_timeline,
+};
+
 use stemplayer_domain::{
     ErrorCode, FrameCount, Microseconds, PlayerError, SampleRate, SourceFrame,
 };

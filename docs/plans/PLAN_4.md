@@ -174,3 +174,47 @@ Diagnostics include roles, sample rate, frames, duration, bit depths, hash statu
 ## Exit gate
 
 Phase 4 is complete when all qualified Studio bundles can be inspected and decoded in bounded windows with exact PCM conversion, malformed or unsafe inputs fail closed, consistency is proven before session creation, and resource use does not scale with track duration.
+
+
+## Phase 4 execution record - 2026-07-22
+
+Status: exit gate passed.
+
+### Implemented checkpoint
+
+- Added an explicit platform-owned source selection boundary for folders, selected manifests, and dropped file groups. The format crate receives a constrained `SourceGroup` and never enumerates outside it.
+- Added bounded schema 1/2 manifest parsing with fatal UTF-8, byte/depth/value limits, forbidden-key and duplicate semantic-field rejection, required role validation, ignored-output handling, and stable source error codes.
+- Added NFC basename validation, cross-platform lowercase matching, normalized collision rejection, regular-file enforcement, and fail-closed path, scheme, drive, UNC, device-name, traversal, and control-character handling.
+- Added streamed SHA-256 verification with 64 KiB reads, cancellation, per-file progress through a bounded nonblocking channel, and mismatch rejection.
+- Added checked RIFF/WAVE inspection for PCM16, PCM24, PCM32, and finite Float32 stereo at 44.1/48 kHz, including bounded unknown-chunk skipping and valid odd padding.
+- Added planar Float32 decode windows capped at 4,096 frames, exact integer divisors, out-of-range finite Float32 preservation, and non-finite rejection.
+- Added cross-track sample-rate/frame consistency, post-validation file identity checks, bytes-read diagnostics, and one-open-file synchronous access.
+- Added `inspect`, `validate`, and `decode-window` probe commands plus the Studio WAV v1 conformance report.
+
+### Evidence at this checkpoint
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Focused Phase 4 tests | `cargo test -p stemplayer-format -p stemplayer-decode -p stemplayer-platform -p stemplayer-probe` | PASS, 28 tests |
+| Workspace format | `cargo fmt --all -- --check` | PASS |
+| Workspace lint | `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | PASS |
+| Workspace tests | `cargo test --locked --workspace --all-features` | PASS, 82 tests |
+| Linux headless | `scripts/qualify-wsl.ps1 -OutputDirectory artifacts/phase4/wsl-ubuntu` | PASS, Ubuntu 24.04 tests and metadata |
+| Dependency audit | `scripts/audit-dependencies.ps1 -OutputDirectory artifacts/phase4/dependencies` | PASS, 623 dependencies, 0 vulnerabilities, 0 unlicensed crates |
+| Dependency direction | `cargo tree --locked -p stemplayer-format -p stemplayer-decode` | PASS, format uses serde, serde_json, sha2, Unicode normalization, and domain; decode adds no source-I/O dependency |
+| Forbidden coupling | exact Phase 4 source scan | PASS, zero webplayer, Node.js, Python, FFmpeg, WebView, Electron, Tauri, AudioWorklet, or converter references |
+| Manifest limits | generated conformance tests | PASS, byte, depth, value, duplicate, forbidden-key, role, hash, path, Unicode, and collision cases |
+| WAV profile | generated conformance tests | PASS, all qualified encodings/rates, optional master, odd padding, chunk reordering, structural truncation, overflow, RF64, channel/rate/format/alignment, and duplicate-data cases |
+| Decode fidelity | golden conversion tests | PASS, integer extrema/sign boundaries, finite Float32 outside `[-1, 1]`, and NaN/Infinity rejection |
+| Resource bound | sparse 4,096-frame vs one-hour 48 kHz test | PASS, identical per-track inspection reads; each 4,096-frame PCM16 window reads 16,384 bytes |
+| Mutation and cancellation | generated conformance tests | PASS, deterministic `E_BUNDLE_INCONSISTENT` and `E_BUNDLE_ABORTED` |
+| WSL artifact | `artifacts/phase4/wsl-ubuntu/headless.json` | PASS |
+| Audit artifact | `artifacts/phase4/dependencies/audit.json` | PASS |
+
+### Exit-gate result
+
+- Passed. Qualified Studio bundles can be securely inspected and decoded in exact bounded windows; malformed and unsafe inputs fail closed; routed-track consistency is established before session creation; and inspection/decode memory and I/O are independent of track duration.
+
+### Limitations
+
+- `STEMPLAYER_NATIVE_STUDIO_BUNDLE` was not configured, so no private listening bundle was tested. The committed synthetic structural gate is complete; audible playback remains Phase 5.

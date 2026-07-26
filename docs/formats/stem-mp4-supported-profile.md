@@ -19,7 +19,7 @@ Resolution order is Native Instruments metadata, normalized track names, then th
 
 ## Codec Profile
 
-Qualified targets are AAC-LC and ALAC in MP4. Exact accepted object types, decoder configuration fields, packet layouts, gapless metadata, and channel layouts are frozen from public synthetic vectors in Phase 7. A successful demux or first decoded packet is not sufficient qualification.
+Qualified targets are AAC-LC and 16, 20, 24, or 32-bit ALAC in MP4. ALAC requires an explicit bounded codec configuration. Exact accepted object types, decoder configuration fields, packet layouts, gapless metadata, and channel layouts are frozen from public synthetic vectors in Phase 7. A successful demux or first decoded packet is not sufficient qualification.
 
 Required decoder evidence per codec is exact frame count, deterministic repeated seek, packet-boundary behavior, edit-list behavior, bounded working memory, no inter-track resampling, and identical output across complete sequential and seeked decode.
 

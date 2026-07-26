@@ -16,6 +16,7 @@ linux-integration = []
 serde.workspace = true
 serde_json.workspace = true
 stemplayer-domain.workspace = true
+stemplayer-format.workspace = true
 
 [lints]
 workspace = true

@@ -1,7 +1,11 @@
 #![deny(unsafe_code)]
 
+mod render;
+
 use serde::Serialize;
 use stemplayer_domain::{ErrorCode, GainDb, OutputMode, OutputPreference, PlayerError, StemRole};
+
+pub use render::MixerRenderer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct StemControl {

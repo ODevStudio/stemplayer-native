@@ -1,5 +1,10 @@
 #![deny(unsafe_code)]
 
+mod playback;
+mod scheduler;
+mod session;
+mod source_ring;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Mutex, RwLock};
@@ -7,6 +12,11 @@ use stemplayer_domain::{
     CommandId, ErrorCode, PlayerCommand, PlayerController, PlayerError, PlayerSnapshot,
     SnapshotPublisher, SnapshotSubscription, TransportState,
 };
+
+pub use playback::PlaybackEngine;
+pub use scheduler::{DecodeMetrics, DecodeScheduler};
+pub use session::{BufferConfig, PlaybackSession};
+pub use source_ring::{RingMetrics, SourceBlock, SynchronizedRing};
 
 #[derive(Debug)]
 pub struct QueuedCommand {

@@ -227,6 +227,10 @@ impl MockController {
             }
             PlayerCommand::SelectDevice(device) => {
                 state.device = device.map(|value| DisplayName::truncated(value.as_str()));
+                if state.transport == TransportState::Error && state.source.is_some() {
+                    state.transport = TransportState::Ready;
+                    state.error = None;
+                }
             }
             PlayerCommand::Cache(
                 CacheCommand::Clear | CacheCommand::Enable | CacheCommand::Disable,
@@ -284,13 +288,22 @@ fn snapshot(state: &MockState) -> PlayerSnapshot {
     let details = SnapshotDetails {
         mixer: MixerSnapshot {
             stems,
+            output_preference: state.mixer.preference(),
             output_mode: state
                 .mixer
                 .effective_output(state.has_master)
                 .unwrap_or(stemplayer_domain::OutputMode::StemMix),
+            ..MixerSnapshot::default()
         },
         device_name: state.device.clone(),
         buffering: state.buffering,
+        buffered_source_frames: 0,
+        device_queue_frames: 0,
+        audio_stream_active: state.transport == TransportState::Playing,
+        underrun_count: 0,
+        overflow_count: 0,
+        resampler: None,
+        source_diagnostics: None,
         waveform: state.waveform,
         error: state.error.clone(),
     };
@@ -418,6 +431,13 @@ mod tests {
         assert_eq!(
             controller.latest_snapshot().transport_state(),
             TransportState::Error
+        );
+        controller
+            .submit(PlayerCommand::SelectDevice(None))
+            .unwrap();
+        assert_eq!(
+            controller.latest_snapshot().transport_state(),
+            TransportState::Ready
         );
     }
 }

@@ -15,8 +15,8 @@ pub use diagnostic::{DiagnosticDetail, PublicDiagnostic};
 pub use error::{ErrorCategory, ErrorCode, ErrorDetail, PlayerError, Recoverability, Severity};
 pub use role::{OutputMode, OutputPreference, SourceKind, StemRole, TrackRole};
 pub use snapshot::{
-    MAX_SNAPSHOT_DIAGNOSTICS, MixerSnapshot, PlayerSnapshot, SnapshotDetails, SourceMetadata,
-    StemSnapshot, WaveformState,
+    AutomationReason, MAX_SNAPSHOT_DIAGNOSTICS, MixerSnapshot, PlayerSnapshot, ResamplerSnapshot,
+    SnapshotDetails, SourceDiagnostics, SourceMetadata, StemSnapshot, WaveformState,
 };
 pub use transport::{TransportMachine, TransportState};
 pub use value::{

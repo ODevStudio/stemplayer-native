@@ -39,11 +39,11 @@ impl TransportState {
                 | (Self::Ready, Self::Priming | Self::Seeking)
                 | (
                     Self::Priming,
-                    Self::Playing | Self::Paused | Self::Seeking | Self::Error
+                    Self::Playing | Self::Paused | Self::Ready | Self::Seeking | Self::Error
                 )
                 | (
                     Self::Playing,
-                    Self::Paused | Self::Seeking | Self::Ended | Self::Error
+                    Self::Ready | Self::Paused | Self::Seeking | Self::Ended | Self::Error
                 )
                 | (
                     Self::Paused,
@@ -51,7 +51,12 @@ impl TransportState {
                 )
                 | (
                     Self::Seeking,
-                    Self::Priming | Self::Playing | Self::Paused | Self::Error
+                    Self::Ready
+                        | Self::Priming
+                        | Self::Playing
+                        | Self::Paused
+                        | Self::Ended
+                        | Self::Error
                 )
                 | (Self::Ended, Self::Priming | Self::Seeking | Self::Ready)
                 | (Self::Error, Self::Empty | Self::Closed)
@@ -114,12 +119,14 @@ mod tests {
                 to,
                 TransportState::Playing
                     | TransportState::Paused
+                    | TransportState::Ready
                     | TransportState::Seeking
                     | TransportState::Error
             ),
             TransportState::Playing => matches!(
                 to,
-                TransportState::Paused
+                TransportState::Ready
+                    | TransportState::Paused
                     | TransportState::Seeking
                     | TransportState::Ended
                     | TransportState::Error
@@ -133,9 +140,11 @@ mod tests {
             ),
             TransportState::Seeking => matches!(
                 to,
-                TransportState::Priming
+                TransportState::Ready
+                    | TransportState::Priming
                     | TransportState::Playing
                     | TransportState::Paused
+                    | TransportState::Ended
                     | TransportState::Error
             ),
             TransportState::Ended => matches!(
