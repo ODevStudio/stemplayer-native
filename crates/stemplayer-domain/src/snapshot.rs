@@ -115,6 +115,23 @@ pub struct SourceDiagnostics {
     pub seek_latency_us: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NetworkDiagnostics {
+    pub redacted_source: BoundedText<256>,
+    pub manifest_latency_us: u64,
+    pub group_ready_us: u64,
+    pub fetch_count: u64,
+    pub fetch_failures: u64,
+    pub buffering_count: u64,
+    pub recovery_us: u64,
+    pub current_group: Option<u32>,
+    pub cache_bytes: u64,
+    pub peak_cache_bytes: u64,
+    pub packets_decoded: u64,
+    pub discarded_preroll_frames: u64,
+    pub inter_stem_offset_frames: i64,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WaveformState {
@@ -122,6 +139,17 @@ pub enum WaveformState {
     Unavailable,
     Analyzing,
     Ready,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaveformCacheState {
+    #[default]
+    Disabled,
+    Miss,
+    Hit,
+    Written,
+    Error,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -136,7 +164,11 @@ pub struct SnapshotDetails {
     pub overflow_count: u64,
     pub resampler: Option<ResamplerSnapshot>,
     pub source_diagnostics: Option<SourceDiagnostics>,
+    pub network_diagnostics: Option<NetworkDiagnostics>,
     pub waveform: WaveformState,
+    pub waveform_progress_percent: u8,
+    pub waveform_cache: WaveformCacheState,
+    pub waveform_throttled: bool,
     pub error: Option<PlayerError>,
 }
 

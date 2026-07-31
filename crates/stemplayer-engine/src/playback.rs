@@ -1,4 +1,4 @@
-use crate::{DecodeScheduler, PlaybackSession, RingMetrics, SynchronizedRing};
+use crate::{AnalysisDecoder, DecodeScheduler, PlaybackSession, RingMetrics, SynchronizedRing};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -20,6 +20,7 @@ pub struct PlaybackEngine {
     position: u64,
     underruns: u64,
     source_exhausted: bool,
+    resume_after_seek: bool,
     last_seek_packets: u32,
     last_seek_discarded_frames: u64,
     last_seek_latency_us: u64,
@@ -59,6 +60,7 @@ impl PlaybackEngine {
             position: start_frame,
             underruns: 0,
             source_exhausted: false,
+            resume_after_seek: false,
             last_seek_packets: 0,
             last_seek_discarded_frames: 0,
             last_seek_latency_us: 0,
@@ -94,11 +96,18 @@ impl PlaybackEngine {
     pub fn seek(&mut self, frame: SourceFrame) -> Result<SourceFrame, PlayerError> {
         let started = Instant::now();
         let before = self.scheduler.metrics();
-        let resume = matches!(
-            self.transport.state(),
-            TransportState::Playing | TransportState::Priming
-        );
-        self.transport.transition(TransportState::Seeking)?;
+        let resume = if self.transport.state() == TransportState::Seeking {
+            self.resume_after_seek
+        } else {
+            matches!(
+                self.transport.state(),
+                TransportState::Playing | TransportState::Priming
+            )
+        };
+        self.resume_after_seek = resume;
+        if self.transport.state() != TransportState::Seeking {
+            self.transport.transition(TransportState::Seeking)?;
+        }
         let end = self.session.metadata().end_frame_exclusive.get() as u64;
         let target = frame.get().max(0) as u64;
         let target = target.min(end);
@@ -118,6 +127,7 @@ impl PlaybackEngine {
                 TransportState::Paused
             })?;
         }
+        self.resume_after_seek = false;
         let after = self.scheduler.metrics();
         self.last_seek_packets = u32::try_from(
             after
@@ -213,8 +223,12 @@ impl PlaybackEngine {
                 overflow_count: self.ring.metrics().overflows,
                 resampler: None,
                 source_diagnostics: self.source_diagnostics(),
+                network_diagnostics: None,
                 waveform: WaveformState::Unavailable,
                 error: None,
+                waveform_progress_percent: 0,
+                waveform_cache: Default::default(),
+                waveform_throttled: false,
             })
         })
     }
@@ -287,6 +301,18 @@ impl PlaybackEngine {
 
     pub const fn ring_metrics(&self) -> RingMetrics {
         self.ring.metrics()
+    }
+
+    pub fn analysis_decoder(&self, cancellation: Arc<AtomicBool>) -> AnalysisDecoder {
+        AnalysisDecoder::new(&self.session, cancellation)
+    }
+
+    pub fn playback_pressure(&self) -> (bool, u64, u64) {
+        (
+            self.transport.state() == TransportState::Playing,
+            self.ring.buffered_frames(),
+            self.session.buffer_config().low_frames,
+        )
     }
 
     fn source_diagnostics(&self) -> Option<SourceDiagnostics> {
@@ -469,6 +495,19 @@ mod tests {
         assert_eq!(engine.position(), SourceFrame::new(0));
         assert_eq!(engine.state(), TransportState::Ready);
         assert!(engine.ring_metrics().capacity_frames <= 44_100 * 12);
+    }
+
+    #[test]
+    fn interrupted_seek_retargets_without_losing_playback_state() {
+        let (mut engine, _fixture) = engine(false);
+        engine.play().unwrap();
+        engine.resume_after_seek = true;
+        engine
+            .transport
+            .transition(TransportState::Seeking)
+            .unwrap();
+        engine.seek(SourceFrame::new(5)).unwrap();
+        assert_eq!(engine.state(), TransportState::Playing);
     }
 
     #[test]

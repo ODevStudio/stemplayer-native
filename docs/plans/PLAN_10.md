@@ -194,3 +194,49 @@ Diagnostics include manifest latency, group-ready time, fetch count/failures, bu
 ## Exit gate
 
 Phase 10 is complete when explicit qualified `stem-hls-v1` sources play with synchronized grouped buffering, exact segment-boundary continuity, bounded network and memory use, secure URL handling, stable seeks and recovery, and no effect on local-player idle footprint when HLS is unused.
+
+## Implementation record
+
+### 2026-07-26 - Phase 10 started
+
+Status: in progress.
+
+Plan:
+
+- Reuse the qualified compressed-container decoder and controller transport rather than introduce a second playback engine.
+- Implement the approved strict manifest and VOD playlist profile, HTTPS-only HTTP policy, complete-group fetching, bounded cache/retry behavior, preroll trimming, and generation cancellation in the existing network crate.
+- Add the smallest production UI path for explicit URL open, buffering state, redacted diagnostics, and cache clearing.
+- Qualify hostile references, alignment, continuity, seek/recovery, bounded resources, lazy runtime initialization, UI behavior, and workspace regressions before evaluating the exit gate.
+
+### 2026-07-28 - Exit gate passed
+
+Status: exit gate passed.
+
+Implementation:
+
+- Added a feature-gated blocking `ureq` client with Rustls/WebPKI roots, zero redirects, bounded headers and bodies, explicit timeouts, no cookies or ambient credentials, and debug-only loopback HTTP. The blocking client creates no async runtime or background network thread.
+- Added strict manifest, waveform, VOD playlist, role, duration, sequence, boundary, codec, and normalized same-origin relative-reference validation. Entry URLs reject credentials, queries, fragments, non-HTTPS schemes, and non-loopback HTTP.
+- Added complete-group fetching and publication, generation cancellation, bounded retry delays, exact frame-derived seek selection, AAC-LC segment decoding, declared preroll removal, one-packet terminal AAC padding removal, and a 64 MiB memory-only LRU group cache.
+- Added an engine-owned external-source boundary so the engine remains independent of HTTP, plus native controller, URL-open, recent-source preference, remote waveform, buffering/network diagnostics, redacted export, and clear-network-cache integration.
+- Added `hls-validate` and `hls-playback-sim` probes and a generated local Windows fixture/server qualification. Private media remains optional through `STEMPLAYER_PRIVATE_HLS_URL` and is never stored in version control.
+
+Security and dependency decisions:
+
+- `ureq 3.3.0` was selected as the smallest synchronous client matching the existing worker model. Default features are disabled and only its Rustls backend is enabled. The resolved chain is `ureq -> rustls 0.23.42 -> rustls-webpki/ring` with WebPKI roots; no Tokio or other async runtime is present.
+- Redirects are rejected rather than followed, every fetched body has a type-specific byte cap, segment limits are additionally derived from declared bitrate and duration, and all source diagnostics redact path contents and credentials.
+- A self-signed local TLS server is rejected as `E_HLS_TLS_FAILED`; redirects, oversized responses, and credential-bearing URLs are rejected as their strict HLS error codes. Missing, corrupt, and oversized segments stop playback without skipping audio.
+- `cargo audit` reported two pre-existing target-specific `quick-xml 0.39.4` advisories through Slint's Linux Wayland build tooling and four pre-existing unmaintained transitive UI dependencies. None are introduced by or reachable from the Phase 10 HTTP/TLS runtime; the new `ureq`/Rustls dependency chain had no advisory finding.
+
+Qualification evidence:
+
+- `cargo test --workspace --all-features`: passed; 147 tests passed and 4 hardware/private-fixture tests remained explicitly ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo build --release -p stemplayer -p stemplayer-probe --features stemplayer-probe/hls`: passed.
+- `scripts/qualify-phase10-windows.ps1`: passed. Full playback rendered and ended at exactly 192,000 source frames; all five roles stayed at zero-frame offset; 5,120 duplicated preroll frames were discarded; one forced 503 recovered within the bounded retry policy; peak cache use was 7,936,556 bytes under the 67,108,864-byte cap.
+- Representative seeks at frames 0, 96,000, and 187,904 produced audio after re-prime. Missing, corrupt, redirect, oversized response, oversized segment, credentials, and invalid TLS cases returned the expected stable error codes.
+- Release idle sample before opening HLS: 48,197,632-byte working set, 14,675,968 private bytes, 0.0625 CPU seconds over three seconds, and 12 process threads. No HLS transport, request, cache group, or network worker exists until URL open.
+- `git diff --check`: passed. Full raw Phase 10 diff and dependency boundary were inspected; the webplayer and converter remain untouched.
+
+Exit-gate decision:
+
+- Qualified explicit `stem-hls-v1` sources play through synchronized complete groups with exact boundaries and end frame, bounded recovery and memory, secure URL/TLS handling, stable seeks, native diagnostics and cache control, and no network runtime effect while unused. Phase 10 passes its exit gate.

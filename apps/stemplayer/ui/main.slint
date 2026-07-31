@@ -1,107 +1,15 @@
-import { Button, CheckBox, ComboBox, HorizontalBox, Palette, RadioGroup, ScrollView, Slider, VerticalBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, HorizontalBox, LineEdit, Palette, ScrollView, TextEdit, VerticalBox } from "std-widgets.slint";
 
-component MixerRow inherits Rectangle {
-    in property <int> role-index;
-    in property <string> role-name;
-    in-out property <float> gain-position;
-    in property <string> gain-text;
-    in-out property <bool> muted;
-    in-out property <bool> soloed;
-    in property <bool> enabled;
-    callback gain-changed(float);
-    callback gain-commit();
-    callback mute-changed(bool);
-    callback solo-changed(bool);
-    height: 44px;
-    background: Palette.alternate-background;
-    border-color: Palette.border;
-    border-width: 1px;
-    accessible-role: groupbox;
-    accessible-label: role-name + " mixer";
-
-    HorizontalBox {
-        padding: 7px;
-        spacing: 8px;
-
-        Text {
-            text: role-name;
-            width: 62px;
-            vertical-alignment: center;
-        }
-
-        gain-slider := Slider {
-            value <=> gain-position;
-            minimum: 0;
-            maximum: 1000;
-            enabled: root.enabled;
-            accessible-label: role-name + " gain";
-            accessible-value: gain-text;
-            changed(value) => { root.gain-changed(value); }
-            released(value) => { root.gain-changed(value); root.gain-commit(); }
-        }
-
-        Button {
-            text: "-";
-            width: 30px;
-            enabled: root.enabled && root.gain-position > 0;
-            accessible-label: "Decrease " + role-name + " gain";
-            clicked => {
-                root.gain-position = max(0, root.gain-position - 10);
-                root.gain-changed(root.gain-position);
-                root.gain-commit();
-            }
-        }
-
-        Button {
-            text: root.gain-text;
-            width: 58px;
-            enabled: root.enabled;
-            accessible-label: "Reset " + role-name + " gain to 100 percent";
-            clicked => {
-                root.gain-position = 800;
-                root.gain-changed(root.gain-position);
-                root.gain-commit();
-            }
-        }
-
-        Button {
-            text: "+";
-            width: 30px;
-            enabled: root.enabled && root.gain-position < 1000;
-            accessible-label: "Increase " + role-name + " gain";
-            clicked => {
-                root.gain-position = min(1000, root.gain-position + 10);
-                root.gain-changed(root.gain-position);
-                root.gain-commit();
-            }
-        }
-
-        mute := Button {
-            text: "Mute";
-            checkable: true;
-            checked <=> root.muted;
-            enabled: root.enabled;
-            accessible-label: "Mute " + role-name;
-            clicked => { root.mute-changed(self.checked); }
-        }
-
-        solo := Button {
-            text: "Solo";
-            checkable: true;
-            checked <=> root.soloed;
-            enabled: root.enabled;
-            accessible-label: "Solo " + role-name;
-            clicked => { root.solo-changed(self.checked); }
-        }
-    }
-}
-
+import { GainFader, StemDeckRow, VerticalGainFader, WaveformRow } from "deck.slint";
+import { IconButton, PlaylistPanel, PlaylistRow } from "chrome.slint";
 export component AppWindow inherits Window {
     title: "Stemplayer Native";
     preferred-width: 780px;
     preferred-height: 620px;
     min-width: 560px;
-    min-height: 400px;
+    min-height: root.playlist-items.length > 0
+        ? 264px + (root.playlist-expanded ? min(190px, 34px + root.playlist-items.length * 28px) : 34px)
+        : 256px;
     background: Palette.background;
     accessible-role: main;
     accessible-label: "Stemplayer native player";
@@ -112,6 +20,7 @@ export component AppWindow inherits Window {
     in property <string> time-text: "0:00 / 0:00";
     in property <string> output-mode: "Stem mix";
     in property <bool> has-master: false;
+    in property <bool> ordinary-audio: false;
     in-out property <int> output-preference: 0;
     in property <[string]> output-devices: ["System default"];
     in-out property <int> output-device-index: 0;
@@ -123,6 +32,20 @@ export component AppWindow inherits Window {
     in-out property <bool> waveform-cache-enabled: false;
     in-out property <int> waveform-cache-limit-index: 1;
     in property <string> waveform-text: "Waveform unavailable";
+    in property <[float]> drums-wave-min: [];
+    in property <[float]> drums-wave-max: [];
+    in property <[float]> bass-wave-min: [];
+    in property <[float]> bass-wave-max: [];
+    in property <[float]> other-wave-min: [];
+    in property <[float]> other-wave-max: [];
+    in property <[float]> vocals-wave-min: [];
+    in property <[float]> vocals-wave-max: [];
+    in property <[color]> ordinary-wave-colors: [];
+    in property <[PlaylistRow]> playlist-items: [];
+    in-out property <int> playlist-index: 0;
+    in-out property <bool> playlist-expanded: true;
+    in-out property <float> playlist-expanded-window-height: 620;
+    in property <string> playlist-cache-progress: "";
     in property <string> buffering-text: "";
     in property <string> output-rate-text: "Output rate unavailable";
     in property <string> error-text: "";
@@ -137,6 +60,9 @@ export component AppWindow inherits Window {
     in property <bool> can-stop: false;
     in property <bool> can-seek: false;
     in property <bool> can-mix: false;
+    in property <bool> has-network-source: false;
+    in-out property <bool> url-dialog-visible: false;
+    in-out property <string> hls-url: "https://";
     in-out property <float> drums-gain-position: 800;
     in-out property <float> bass-gain-position: 800;
     in-out property <float> other-gain-position: 800;
@@ -149,21 +75,26 @@ export component AppWindow inherits Window {
     in-out property <bool> bass-muted: false;
     in-out property <bool> other-muted: false;
     in-out property <bool> vocals-muted: false;
-    in-out property <bool> drums-soloed: false;
-    in-out property <bool> bass-soloed: false;
-    in-out property <bool> other-soloed: false;
-    in-out property <bool> vocals-soloed: false;
     in-out property <float> seek-position: 0;
     in-out property <bool> diagnostics-visible: false;
+    in-out property <bool> settings-visible: false;
     in property <string> diagnostics-text: "";
+    in property <string> diagnostics-export-status: "";
     in-out property <bool> window-minimized <=> root.minimized;
 
     callback open-source();
     callback open-manifest();
     callback open-folder();
+    callback open-url(string);
     callback open-recent(int);
     callback clear-recent();
     callback set-recent-sources-enabled(bool);
+    callback set-waveform-cache-enabled(bool);
+    callback set-waveform-cache-limit(int);
+    callback clear-current-waveform-cache();
+    callback clear-waveform-cache();
+    callback clear-network-cache();
+    callback export-diagnostics();
     callback retry-device(int);
     callback reset-player();
     callback play();
@@ -173,12 +104,21 @@ export component AppWindow inherits Window {
     callback set-gain(int, float);
     callback commit-commands();
     callback set-mute(int, bool);
-    callback set-solo(int, bool);
     callback snapshot-tick();
     callback reset-mix();
     callback set-output-preference(int);
     callback select-output-device(int);
+    callback select-playlist-item(int, bool, bool);
+    callback context-select-playlist-item(int);
+    callback select-all-playlist-items();
+    callback remove-playlist-items();
+    callback activate-playlist-item(int);
+    callback playlist-expansion-changed(bool);
     callback tick();
+
+    changed playlist-expanded => {
+        root.playlist-expansion-changed(root.playlist-expanded);
+    }
 
     changed theme-preference => {
         Palette.color-scheme = root.theme-preference == 1 ? ColorScheme.light : root.theme-preference == 2 ? ColorScheme.dark : ColorScheme.unknown;
@@ -193,10 +133,6 @@ export component AppWindow inherits Window {
         root.bass-muted = false;
         root.other-muted = false;
         root.vocals-muted = false;
-        root.drums-soloed = false;
-        root.bass-soloed = false;
-        root.other-soloed = false;
-        root.vocals-soloed = false;
         root.output-preference = 0;
     }
 
@@ -222,8 +158,8 @@ export component AppWindow inherits Window {
                 reject
             }
         }
-        KeyBinding { keys: @keys(Control + O); enabled: root.can-open; activated => { root.open-source(); } }
-        KeyBinding { keys: @keys(Control + Shift + O); enabled: root.can-open; activated => { root.open-folder(); } }
+        KeyBinding { keys: @keys(Control + O); enabled: root.can-open; activated => { root.open-folder(); } }
+        KeyBinding { keys: @keys(Control + U); enabled: root.can-open; activated => { root.url-dialog-visible = true; } }
         KeyBinding {
             keys: @keys(P);
             activated => {
@@ -231,7 +167,6 @@ export component AppWindow inherits Window {
                 else if (root.can-play) { root.play(); }
             }
         }
-        KeyBinding { keys: @keys(S); enabled: root.can-stop; activated => { root.stop(); } }
         KeyBinding { keys: @keys(R); enabled: root.can-mix; activated => { root.reset-mix(); } }
         KeyBinding {
             keys: @keys(LeftArrow);
@@ -250,57 +185,90 @@ export component AppWindow inherits Window {
             }
         }
         KeyBinding { keys: @keys(D); activated => { root.diagnostics-visible = !root.diagnostics-visible; } }
-        KeyBinding { keys: @keys(Alt + "1"); enabled: root.can-mix; activated => { root.drums-muted = !root.drums-muted; root.set-mute(0, root.drums-muted); } }
-        KeyBinding { keys: @keys(Alt + "2"); enabled: root.can-mix; activated => { root.bass-muted = !root.bass-muted; root.set-mute(1, root.bass-muted); } }
-        KeyBinding { keys: @keys(Alt + "3"); enabled: root.can-mix; activated => { root.other-muted = !root.other-muted; root.set-mute(2, root.other-muted); } }
-        KeyBinding { keys: @keys(Alt + "4"); enabled: root.can-mix; activated => { root.vocals-muted = !root.vocals-muted; root.set-mute(3, root.vocals-muted); } }
-        KeyBinding { keys: @keys(Alt + Shift + "1"); enabled: root.can-mix; activated => { root.drums-soloed = !root.drums-soloed; root.set-solo(0, root.drums-soloed); } }
-        KeyBinding { keys: @keys(Alt + Shift + "2"); enabled: root.can-mix; activated => { root.bass-soloed = !root.bass-soloed; root.set-solo(1, root.bass-soloed); } }
-        KeyBinding { keys: @keys(Alt + Shift + "3"); enabled: root.can-mix; activated => { root.other-soloed = !root.other-soloed; root.set-solo(2, root.other-soloed); } }
-        KeyBinding { keys: @keys(Alt + Shift + "4"); enabled: root.can-mix; activated => { root.vocals-soloed = !root.vocals-soloed; root.set-solo(3, root.vocals-soloed); } }
+        KeyBinding { keys: @keys(Alt + "1"); enabled: root.can-mix && !root.ordinary-audio; activated => { root.drums-muted = !root.drums-muted; root.set-mute(0, root.drums-muted); } }
+        KeyBinding { keys: @keys(Alt + "2"); enabled: root.can-mix && !root.ordinary-audio; activated => { root.bass-muted = !root.bass-muted; root.set-mute(1, root.bass-muted); } }
+        KeyBinding { keys: @keys(Alt + "3"); enabled: root.can-mix && !root.ordinary-audio; activated => { root.other-muted = !root.other-muted; root.set-mute(2, root.other-muted); } }
+        KeyBinding { keys: @keys(Alt + "4"); enabled: root.can-mix && !root.ordinary-audio; activated => { root.vocals-muted = !root.vocals-muted; root.set-mute(3, root.vocals-muted); } }
 
     content := Rectangle {
-        width: min(root.width, 920px);
-        height: min(root.height, 640px);
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
+        width: root.width;
+        height: root.height;
         background: Palette.background;
 
-        ScrollView {
-            VerticalBox {
-                padding: 10px;
-                spacing: 5px;
-
-        HorizontalBox {
-            spacing: 8px;
-            Button {
-                text: "Container";
-                primary: true;
+        VerticalBox {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 8px;
+                padding-bottom: 12px;
+                spacing: 8px;
+        Rectangle {
+            min-height: 52px;
+            preferred-height: 52px;
+            max-height: 52px;
+            HorizontalBox {
+                y: -1px;
+                width: parent.width;
+                height: 32px;
+                spacing: 8px;
+            IconButton {
+                glyph: "\u{E8B7}";
+                label: "Open track folder";
                 enabled: root.can-open;
-                accessible-label: "Open stem container";
-                clicked => { root.open-source(); }
+                clicked => { root.settings-visible = false; root.open-folder(); }
+            }
+            IconButton {
+                glyph: "\u{E753}";
+                label: "Open network URL";
+                enabled: root.can-open;
+                clicked => { root.settings-visible = false; root.url-dialog-visible = true; }
+            }
+            Rectangle { width: 8px; }
+            IconButton {
+                glyph: root.can-pause ? "\u{E769}" : "\u{E768}";
+                label: root.can-pause ? "Pause" : "Play";
+                enabled: root.can-pause || root.can-play || root.playlist-items.length > 0;
+                clicked => { if root.can-pause { root.pause(); } else { root.play(); } }
+            }
+            IconButton {
+                glyph: "\u{E72C}";
+                label: root.ordinary-audio ? "Reset volume" : "Reset mixer";
+                enabled: root.can-mix;
+                clicked => { root.reset-mixer-controls(); root.reset-mix(); }
+            }
+            Rectangle {
+                width: 104px;
+                height: 32px;
+                Text {
+                    y: 2px;
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.time-text;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+            Rectangle {
+                height: 32px;
+                horizontal-stretch: 1;
+                Text {
+                    y: 2px;
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.source-name;
+                    font-size: 15px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
             }
             Button {
-                text: "Manifest";
-                enabled: root.can-open;
-                accessible-label: "Open Studio bundle manifest";
-                clicked => { root.open-manifest(); }
+                width: 40px;
+                height: 32px;
+                text: "...";
+                accessible-label: "Player settings";
+                clicked => { root.settings-visible = !root.settings-visible; }
             }
-            Button {
-                text: "Folder";
-                enabled: root.can-open;
-                accessible-label: "Open Studio bundle folder";
-                clicked => { root.open-folder(); }
-            }
-            VerticalBox {
-                spacing: 2px;
-                Text { text: root.source-name; font-size: 16px; font-weight: 600; overflow: elide; }
-                Text { text: root.source-summary; color: Palette.foreground.with-alpha(0.7); overflow: elide; }
-            }
-            Text {
-                text: root.buffering-text == "" ? root.state-text : root.buffering-text;
-                vertical-alignment: center;
-                horizontal-alignment: right;
             }
         }
 
@@ -317,7 +285,7 @@ export component AppWindow inherits Window {
                 HorizontalBox {
                     spacing: 6px;
                     Button { text: "Retry output"; clicked => { root.retry-device(root.output-device-index); } }
-                    Button { text: "Choose source"; clicked => { root.open-source(); } }
+                    Button { text: "Choose source"; clicked => { root.open-folder(); } }
                     Button { text: "Reset player"; clicked => { root.reset-player(); } }
                     Button {
                         text: root.error-details-visible ? "Hide details" : "Details";
@@ -333,152 +301,154 @@ export component AppWindow inherits Window {
         }
 
         if root.error-text == "": Rectangle {
-            height: 60px;
-            background: Palette.alternate-background;
-            border-color: Palette.border;
+            height: 176px;
+            background: #0b0e0f;
+            border-color: #3a4144;
             border-width: 1px;
-            accessible-role: image;
-            accessible-label: root.waveform-text;
-
-            VerticalBox {
-                padding: 8px;
-                spacing: 4px;
-                Text {
-                    text: root.waveform-text;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            accessible-role: slider;
+            accessible-label: root.waveform-text + ". Playback position";
+            accessible-value: root.time-text;
+            accessible-enabled: root.can-seek;
+            accessible-value-minimum: 0;
+            accessible-value-maximum: 1000;
+            accessible-value-step: 1;
+            accessible-action-set-value(value) => {
+                if value.is-float() {
+                    root.seek-position = min(1, max(0, value.to-float() / 1000));
+                    root.seek(root.seek-position);
                 }
-                seek-slider := Slider {
-                    minimum: 0;
-                    maximum: 1;
-                    value <=> root.seek-position;
+            }
+
+            deck := Rectangle {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: 168px;
+                background: #101415;
+
+                if root.ordinary-audio: VerticalGainFader {
+                    x: 0px;
+                    width: 64px;
+                    height: parent.height;
+                    gain-position <=> root.drums-gain-position;
+                    enabled: root.can-mix;
+                    gain-changed(value) => { root.set-gain(0, value); }
+                    gain-commit => { root.commit-commands(); }
+                }
+                if root.ordinary-audio: WaveformRow {
+                    x: 64px;
+                    width: parent.width - 64px;
+                    height: parent.height;
+                    role-name: "Audio";
+                    lower-peaks: root.drums-wave-min;
+                    upper-peaks: root.drums-wave-max;
+                    peak-color: #00a7bd;
+                    peak-colors: root.ordinary-wave-colors;
+                }
+                if !root.ordinary-audio: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    StemDeckRow {
+                        y: 0px;
+                        role-name: "Drums";
+                        lower-peaks: root.drums-wave-min;
+                        upper-peaks: root.drums-wave-max;
+                        peak-color: #00a7bd;
+                        gain-position <=> root.drums-gain-position;
+                        gain-text: root.drums-gain-text;
+                        muted <=> root.drums-muted;
+                        enabled: root.can-mix;
+                        gain-changed(value) => { root.set-gain(0, value); }
+                        gain-commit => { root.commit-commands(); }
+                        mute-changed(value) => { root.set-mute(0, value); }
+                    }
+                    StemDeckRow {
+                        y: 42px;
+                        role-name: "Bass";
+                        lower-peaks: root.bass-wave-min;
+                        upper-peaks: root.bass-wave-max;
+                        peak-color: #d48612;
+                        gain-position <=> root.bass-gain-position;
+                        gain-text: root.bass-gain-text;
+                        muted <=> root.bass-muted;
+                        enabled: root.can-mix;
+                        gain-changed(value) => { root.set-gain(1, value); }
+                        gain-commit => { root.commit-commands(); }
+                        mute-changed(value) => { root.set-mute(1, value); }
+                    }
+                    StemDeckRow {
+                        y: 84px;
+                        role-name: "Other";
+                        lower-peaks: root.other-wave-min;
+                        upper-peaks: root.other-wave-max;
+                        peak-color: #36a857;
+                        gain-position <=> root.other-gain-position;
+                        gain-text: root.other-gain-text;
+                        muted <=> root.other-muted;
+                        enabled: root.can-mix;
+                        gain-changed(value) => { root.set-gain(2, value); }
+                        gain-commit => { root.commit-commands(); }
+                        mute-changed(value) => { root.set-mute(2, value); }
+                    }
+                    StemDeckRow {
+                        y: 126px;
+                        role-name: "Vocals";
+                        lower-peaks: root.vocals-wave-min;
+                        upper-peaks: root.vocals-wave-max;
+                        peak-color: #cf4d8b;
+                        gain-position <=> root.vocals-gain-position;
+                        gain-text: root.vocals-gain-text;
+                        muted <=> root.vocals-muted;
+                        enabled: root.can-mix;
+                        gain-changed(value) => { root.set-gain(3, value); }
+                        gain-commit => { root.commit-commands(); }
+                        mute-changed(value) => { root.set-mute(3, value); }
+                    }
+                }
+
+                Rectangle {
+                    x: (root.ordinary-audio ? 64px : 208px)
+                        + root.seek-position * (parent.width - (root.ordinary-audio ? 64px : 208px));
+                    width: 3px;
+                    height: parent.height;
+                    background: #f5f7f7;
+                    border-color: #111516;
+                    border-width: 1px;
+                }
+
+                TouchArea {
+                    x: root.ordinary-audio ? 64px : 208px;
+                    width: parent.width - self.x;
+                    height: parent.height;
                     enabled: root.can-seek;
-                    accessible-label: "Playback position";
-                    released(value) => { root.seek(value); }
+                    mouse-cursor: crosshair;
+                    clicked => {
+                        root.seek-position = min(1, max(0, self.mouse-x / self.width));
+                        root.seek(root.seek-position);
+                    }
                 }
             }
         }
-
-        HorizontalBox {
-            spacing: 7px;
-            Button { text: "Play"; enabled: root.can-play; clicked => { root.play(); } }
-            Button { text: "Pause"; enabled: root.can-pause; clicked => { root.pause(); } }
-            Button { text: "Stop"; enabled: root.can-stop; clicked => { root.stop(); } }
-            Button {
-                text: "Reset";
-                enabled: root.can-mix;
-                clicked => { root.reset-mixer-controls(); root.reset-mix(); }
-            }
-            Text { text: root.time-text; vertical-alignment: center; }
-            Text { text: root.output-mode; vertical-alignment: center; horizontal-alignment: right; }
-        }
-
-        MixerRow {
-            role-index: 0; role-name: "Drums"; gain-position <=> root.drums-gain-position; gain-text: root.drums-gain-text; enabled: root.can-mix;
-            muted <=> root.drums-muted; soloed <=> root.drums-soloed;
-            gain-changed(value) => { root.set-gain(0, value); }
-            gain-commit => { root.commit-commands(); }
-            mute-changed(value) => { root.set-mute(0, value); }
-            solo-changed(value) => { root.set-solo(0, value); }
-        }
-        MixerRow {
-            role-index: 1; role-name: "Bass"; gain-position <=> root.bass-gain-position; gain-text: root.bass-gain-text; enabled: root.can-mix;
-            muted <=> root.bass-muted; soloed <=> root.bass-soloed;
-            gain-changed(value) => { root.set-gain(1, value); }
-            gain-commit => { root.commit-commands(); }
-            mute-changed(value) => { root.set-mute(1, value); }
-            solo-changed(value) => { root.set-solo(1, value); }
-        }
-        MixerRow {
-            role-index: 2; role-name: "Other"; gain-position <=> root.other-gain-position; gain-text: root.other-gain-text; enabled: root.can-mix;
-            muted <=> root.other-muted; soloed <=> root.other-soloed;
-            gain-changed(value) => { root.set-gain(2, value); }
-            gain-commit => { root.commit-commands(); }
-            mute-changed(value) => { root.set-mute(2, value); }
-            solo-changed(value) => { root.set-solo(2, value); }
-        }
-        MixerRow {
-            role-index: 3; role-name: "Vocals"; gain-position <=> root.vocals-gain-position; gain-text: root.vocals-gain-text; enabled: root.can-mix;
-            muted <=> root.vocals-muted; soloed <=> root.vocals-soloed;
-            gain-changed(value) => { root.set-gain(3, value); }
-            gain-commit => { root.commit-commands(); }
-            mute-changed(value) => { root.set-mute(3, value); }
-            solo-changed(value) => { root.set-solo(3, value); }
-        }
-
-        output-mode-selector := RadioGroup {
-            title: "Output mode";
-            orientation: horizontal;
-            enabled: root.can-mix;
-            selected(value) => {
-                root.output-preference = value == "Automatic" ? 0 : value == "Master reference" ? 1 : 2;
-                root.set-output-preference(root.output-preference);
-            }
-            RadioButton { text: "Automatic"; checked: root.output-preference == 0; }
-            RadioButton { text: "Master reference"; checked: root.output-preference == 1; enabled: root.has-master; }
-            RadioButton { text: "Stem mix"; checked: root.output-preference == 2; }
-        }
-
-        HorizontalBox {
-            spacing: 7px;
-            Text { text: "Output"; vertical-alignment: center; }
-            output-device-selector := ComboBox {
-                model: root.output-devices;
-                current-index <=> root.output-device-index;
-                accessible-label: "Output device";
-                selected(value) => { root.select-output-device(self.current-index); }
-            }
+        if root.has-master && root.output-mode == "Master reference": HorizontalBox {
+            spacing: 8px;
             Text {
-                text: root.output-rate-text;
+                text: "Overall";
+                width: 48px;
                 vertical-alignment: center;
-                accessible-label: root.output-rate-text;
             }
-            Text { text: "Theme"; vertical-alignment: center; }
-            ComboBox {
-                model: ["System", "Light", "Dark"];
-                current-index <=> root.theme-preference;
-                accessible-label: "Theme";
-            }
-            CheckBox {
-                text: "Diagnostics";
-                checked <=> root.diagnostics-visible;
-            }
-        }
-
-        HorizontalBox {
-            spacing: 7px;
-            recent-selector := ComboBox {
-                model: root.recent-sources;
-                current-index <=> root.recent-source-index;
-                enabled: root.recent-sources.length > 0;
-                accessible-label: "Recent source";
-            }
-            Button {
-                text: "Open recent";
-                enabled: root.can-open && root.recent-sources.length > 0;
-                clicked => { root.open-recent(root.recent-source-index); }
-            }
-            Button {
-                text: "Clear";
-                enabled: root.recent-sources.length > 0;
-                accessible-label: "Clear recent sources";
-                clicked => { root.clear-recent(); }
-            }
-            CheckBox {
-                text: "Remember";
-                checked <=> root.recent-sources-enabled;
-                accessible-label: "Remember recent sources";
-                toggled => { root.set-recent-sources-enabled(self.checked); }
-            }
-            CheckBox {
-                text: "Waveform cache";
-                checked <=> root.waveform-cache-enabled;
-            }
-            ComboBox {
-                model: ["64 MB", "256 MB", "1 GB", "4 GB"];
-                current-index <=> root.waveform-cache-limit-index;
-                enabled: root.waveform-cache-enabled;
-                accessible-label: "Waveform cache limit";
+            GainFader {
+                gain-position <=> root.drums-gain-position;
+                gain-text: root.drums-gain-text;
+                role-name: "Overall";
+                enabled: root.can-mix;
+                gain-changed(value) => {
+                    root.drums-gain-position = value;
+                    root.bass-gain-position = value;
+                    root.other-gain-position = value;
+                    root.vocals-gain-position = value;
+                    root.set-gain(-1, value);
+                }
+                gain-commit => { root.commit-commands(); }
             }
         }
 
@@ -489,13 +459,175 @@ export component AppWindow inherits Window {
             border-width: 1px;
             accessible-role: groupbox;
             accessible-label: "Diagnostics";
-            Text {
-                text: root.diagnostics-text;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-                font-size: 11px;
+            HorizontalBox {
+                spacing: 7px;
+                diagnostics-editor := TextEdit {
+                    text: root.diagnostics-text;
+                    read-only: true;
+                    wrap: word-wrap;
+                    accessible-label: "Diagnostics text";
+                    font-size: 11px;
+                }
+                Text {
+                    text: root.diagnostics-export-status;
+                    vertical-alignment: center;
+                    accessible-label: root.diagnostics-export-status;
+                    font-size: 11px;
+                }
+                Button {
+                    text: "Copy";
+                    clicked => {
+                        diagnostics-editor.select-all();
+                        diagnostics-editor.copy();
+                        diagnostics-editor.clear-selection();
+                    }
+                }
+                Button {
+                    text: "Export JSON";
+                    clicked => { root.export-diagnostics(); }
+                }
             }
+        }
+        if root.playlist-items.length > 0: PlaylistPanel {
+            items: root.playlist-items;
+            selected-index <=> root.playlist-index;
+            expanded <=> root.playlist-expanded;
+            cache-progress: root.playlist-cache-progress;
+            selected(index, control, shift) => { root.select-playlist-item(index, control, shift); }
+            context-selected(index) => { root.context-select-playlist-item(index); }
+            activated(index) => { root.activate-playlist-item(index); }
+            select-all => { root.select-all-playlist-items(); }
+            remove-selected => { root.remove-playlist-items(); }
+        }
+}
+
+if root.settings-visible: Rectangle {
+    z: 10;
+    x: root.width - self.width - 60px;
+    y: 8px;
+    width: min(root.width - 24px, 480px);
+    height: min(root.height - 16px, 336px);
+    background: Palette.background;
+    border-color: Palette.border;
+    border-width: 1px;
+    border-radius: 4px;
+    ScrollView {
+        VerticalBox {
+            padding: 14px;
+            spacing: 8px;
+            alignment: start;
+            HorizontalBox {
+                min-height: 40px;
+                preferred-height: 40px;
+                spacing: 8px;
+                Text { text: "Output"; width: 64px; vertical-alignment: center; }
+                output-device-selector := ComboBox {
+                    model: root.output-devices;
+                    current-index <=> root.output-device-index;
+                    accessible-label: "Output device";
+                    selected(value) => { root.select-output-device(self.current-index); }
+                }
+            }
+            Text {
+                min-height: 20px;
+                preferred-height: 20px;
+                text: root.output-rate-text;
+                color: Palette.foreground.with-alpha(0.7);
+            }
+            HorizontalBox {
+                min-height: 40px;
+                preferred-height: 40px;
+                spacing: 8px;
+                Text { text: "Theme"; width: 64px; vertical-alignment: center; }
+                ComboBox {
+                    model: ["System", "Light", "Dark"];
+                    current-index <=> root.theme-preference;
+                    accessible-label: "Theme";
+                }
+                CheckBox { text: "Diagnostics"; checked <=> root.diagnostics-visible; }
+            }
+            recent-selector := ComboBox {
+                min-height: 40px;
+                preferred-height: 40px;
+                model: root.recent-sources;
+                current-index <=> root.recent-source-index;
+                enabled: root.recent-sources.length > 0;
+                accessible-label: "Recent source";
+            }
+            HorizontalBox {
+                min-height: 40px;
+                preferred-height: 40px;
+                spacing: 8px;
+                Button {
+                    text: "Open recent";
+                    enabled: root.can-open && root.recent-sources.length > 0;
+                    clicked => { root.open-recent(root.recent-source-index); }
+                }
+                Button { text: "Clear"; enabled: root.recent-sources.length > 0; clicked => { root.clear-recent(); } }
+                CheckBox {
+                    text: "Remember";
+                    checked <=> root.recent-sources-enabled;
+                    toggled => { root.set-recent-sources-enabled(self.checked); }
+                }
+            }
+            HorizontalBox {
+                min-height: 40px;
+                preferred-height: 40px;
+                spacing: 8px;
+                CheckBox {
+                    text: "Waveform cache";
+                    checked <=> root.waveform-cache-enabled;
+                    toggled => { root.set-waveform-cache-enabled(self.checked); }
+                }
+                cache-limit-selector := ComboBox {
+                    model: ["64 MB", "256 MB", "1 GB", "4 GB"];
+                    current-index <=> root.waveform-cache-limit-index;
+                    enabled: root.waveform-cache-enabled;
+                    accessible-label: "Waveform cache limit";
+                    selected(value) => { root.set-waveform-cache-limit(self.current-index); }
+                }
+            }
+            HorizontalBox {
+                min-height: 40px;
+                preferred-height: 40px;
+                spacing: 8px;
+                Button { text: "Clear current"; enabled: root.waveform-cache-enabled && root.can-seek; clicked => { root.clear-current-waveform-cache(); } }
+                Button { text: "Clear all"; enabled: root.waveform-cache-enabled; clicked => { root.clear-waveform-cache(); } }
+                Button { text: "Clear network"; enabled: root.has-network-source; clicked => { root.clear-network-cache(); } }
+            }
+        }
+    }
+}
+
+if root.url-dialog-visible: Rectangle {
+    z: 10;
+    x: (root.width - self.width) / 2;
+    y: (root.height - self.height) / 2;
+    width: min(root.width - 32px, 560px);
+    height: 94px;
+    background: Palette.alternate-background;
+    border-color: Palette.border;
+    border-width: 1px;
+    accessible-role: groupbox;
+    accessible-label: "Open HLS URL";
+
+    VerticalBox {
+        padding: 10px;
+        spacing: 8px;
+        url-input := LineEdit {
+            text <=> root.hls-url;
+            placeholder-text: "https://example.com/stemset.json";
+            accessible-label: "HTTPS stemset URL";
+        }
+        HorizontalBox {
+            spacing: 8px;
+            Button {
+                text: "Open";
+                primary: true;
+                enabled: root.hls-url != "";
+                clicked => { root.open-url(root.hls-url); root.url-dialog-visible = false; }
+            }
+            Button { text: "Cancel"; clicked => { root.url-dialog-visible = false; } }
         }
     }
 }

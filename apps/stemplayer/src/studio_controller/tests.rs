@@ -1,10 +1,21 @@
 use super::*;
 
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn cancelled_decode_is_not_published_as_an_error() {
+    let cancelled = PlayerError::new(ErrorCode::BundleAborted, "cancelled");
+    let failure = PlayerError::new(ErrorCode::Internal, "failed");
+    assert!(!should_publish_error(&cancelled, true));
+    assert!(should_publish_error(&cancelled, false));
+    assert!(should_publish_error(&failure, true));
+}
+
 #[test]
 fn shutdown_bypasses_a_full_command_queue() {
     let controller = StudioController::new();
     for _ in 0..COMMAND_CAPACITY {
-        let _ = controller.submit(PlayerCommand::Cache(stemplayer_domain::CacheCommand::Clear));
+        let _ = controller.submit(PlayerCommand::Cache(CacheCommand::ClearAll));
     }
     assert!(controller.submit(PlayerCommand::Shutdown).is_ok());
     controller.shutdown_and_join();
@@ -32,6 +43,12 @@ fn controller_loads_seeks_and_stops_without_opening_audio() {
         SourceFrame::new(8)
     );
 
+    wait_for_waveform(&controller);
+    let waveform = controller.latest_waveform().unwrap();
+    assert_eq!(waveform.progress, 1.0);
+    assert_eq!(waveform.levels.len(), 1);
+    assert!(waveform.levels.iter().all(|level| level.roles.len() == 4));
+
     controller
         .submit(PlayerCommand::SeekFrame(SourceFrame::new(4)))
         .unwrap();
@@ -56,6 +73,150 @@ fn controller_loads_seeks_and_stops_without_opening_audio() {
         SourceFrame::new(0)
     );
     controller.shutdown_and_join();
+}
+
+#[test]
+fn source_switch_replaces_in_progress_waveform_analysis() {
+    let first_fixture = Fixture::with_frames(200_000);
+    let second_fixture = Fixture::with_frames(16);
+    let controller = StudioController::new();
+    let first = stemplayer_domain::BoundedText::new(first_fixture.path.to_string_lossy()).unwrap();
+    let second =
+        stemplayer_domain::BoundedText::new(second_fixture.path.to_string_lossy()).unwrap();
+
+    controller
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(first)))
+        .unwrap();
+    wait_for(&controller, TransportState::Ready);
+    controller
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(second)))
+        .unwrap();
+    wait_until(&controller, |snapshot| {
+        snapshot
+            .source()
+            .is_some_and(|source| source.end_frame_exclusive == SourceFrame::new(16))
+    });
+    wait_for_waveform(&controller);
+    let snapshot = controller.latest_snapshot();
+    let waveform = controller.latest_waveform().unwrap();
+    assert_eq!(waveform.generation, snapshot.generation());
+    assert_eq!(waveform.end_frame_exclusive, SourceFrame::new(16));
+    controller.shutdown_and_join();
+}
+
+#[test]
+fn controller_reopens_from_the_waveform_cache() {
+    let fixture = Fixture::new();
+    let cache_path = fixture.path.with_extension("waveform-cache");
+    let cache = Arc::new(
+        WaveformCache::new(
+            cache_path.clone(),
+            stemplayer_waveform::CacheConfig::default(),
+        )
+        .unwrap(),
+    );
+    let path = stemplayer_domain::BoundedText::new(fixture.path.to_string_lossy()).unwrap();
+    let first = StudioController::with_cache(Some(Arc::clone(&cache)), true);
+    first
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(path.clone())))
+        .unwrap();
+    wait_for(&first, TransportState::Ready);
+    wait_for_waveform(&first);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while std::fs::read_dir(&cache_path).unwrap().all(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_none_or(|value| value != "spwf")
+    }) {
+        assert!(Instant::now() < deadline, "waveform cache write timed out");
+        thread::sleep(Duration::from_millis(5));
+    }
+    first.shutdown_and_join();
+
+    let second = StudioController::with_cache(Some(Arc::clone(&cache)), true);
+    second
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(path.clone())))
+        .unwrap();
+    wait_for(&second, TransportState::Ready);
+    wait_until(&second, |snapshot| {
+        snapshot.details().waveform_cache == stemplayer_domain::WaveformCacheState::Hit
+    });
+    assert_eq!(
+        second.latest_waveform().unwrap().cache_status,
+        CacheStatus::Hit
+    );
+    second
+        .submit(PlayerCommand::Cache(CacheCommand::ClearCurrent))
+        .unwrap();
+    wait_for_cache_entries(&cache_path, false);
+    second.shutdown_and_join();
+
+    let third = StudioController::with_cache(Some(cache), true);
+    third
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(path)))
+        .unwrap();
+    wait_for(&third, TransportState::Ready);
+    wait_for_waveform(&third);
+    assert_ne!(
+        third.latest_waveform().unwrap().cache_status,
+        CacheStatus::Hit
+    );
+    third.shutdown_and_join();
+    let _ = std::fs::remove_dir_all(cache_path);
+}
+
+#[test]
+fn paused_controller_caches_the_remaining_playlist() {
+    let first_fixture = Fixture::with_frames(200_000);
+    let second_fixture = Fixture::with_frames(200_001);
+    let cache_path = first_fixture.path.with_extension("playlist-waveform-cache");
+    let cache = Arc::new(
+        WaveformCache::new(
+            cache_path.clone(),
+            stemplayer_waveform::CacheConfig::default(),
+        )
+        .unwrap(),
+    );
+    let controller = StudioController::with_cache(Some(cache), true);
+    controller
+        .set_playlist_sources(vec![
+            first_fixture.path.clone(),
+            second_fixture.path.clone(),
+        ])
+        .unwrap();
+    let path = stemplayer_domain::BoundedText::new(first_fixture.path.to_string_lossy()).unwrap();
+    controller
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(path)))
+        .unwrap();
+    wait_for(&controller, TransportState::Ready);
+    wait_for_waveform(&controller);
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while controller.playlist_cache_progress().is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "playlist cache analysis timed out"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let second =
+        stemplayer_domain::BoundedText::new(second_fixture.path.to_string_lossy()).unwrap();
+    controller
+        .submit(PlayerCommand::Open(SourceLocator::LocalPath(second)))
+        .unwrap();
+    wait_until(&controller, |snapshot| {
+        snapshot
+            .source()
+            .is_some_and(|source| source.end_frame_exclusive == SourceFrame::new(200_001))
+    });
+    wait_until(&controller, |snapshot| {
+        snapshot.details().waveform_cache == stemplayer_domain::WaveformCacheState::Hit
+    });
+    assert_eq!(controller.playlist_cache_progress(), None);
+    assert_eq!(controller.latest_waveform().unwrap().levels.len(), 1);
+    controller.shutdown_and_join();
+    let _ = std::fs::remove_dir_all(cache_path);
 }
 
 #[test]
@@ -171,11 +332,9 @@ impl Fixture {
     }
 
     fn with_frames(frames: usize) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "stemplayer-controller-{}-{}",
-            std::process::id(),
-            Instant::now().elapsed().as_nanos()
-        ));
+        let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("stemplayer-controller-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         let roles = ["drums", "bass", "other", "vocals"];
         for (index, role) in roles.iter().enumerate() {
@@ -224,6 +383,35 @@ fn wait_until(controller: &StudioController, predicate: impl Fn(&PlayerSnapshot)
     let deadline = Instant::now() + Duration::from_secs(2);
     while !predicate(&controller.latest_snapshot()) {
         assert!(Instant::now() < deadline, "controller condition timed out");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_waveform(controller: &StudioController) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while controller
+        .latest_waveform()
+        .is_none_or(|waveform| waveform.progress != 1.0)
+    {
+        assert!(Instant::now() < deadline, "waveform analysis timed out");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_cache_entries(path: &std::path::Path, expected: bool) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let present = std::fs::read_dir(path).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|value| value == "spwf")
+        });
+        if present == expected {
+            return;
+        }
+        assert!(Instant::now() < deadline, "waveform cache update timed out");
         thread::sleep(Duration::from_millis(5));
     }
 }

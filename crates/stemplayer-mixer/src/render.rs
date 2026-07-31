@@ -62,6 +62,7 @@ pub struct MixerRenderer {
     crossfade_frames: u32,
     gains: [LinearRamp; 4],
     master_gain: LinearRamp,
+    master_volume: LinearRamp,
     automation_count: u64,
     crossfade_count: u64,
     last_automation_reason: Option<AutomationReason>,
@@ -76,6 +77,7 @@ impl MixerRenderer {
         let gains = state.effective_linear_gains().map(LinearRamp::new);
         let master =
             f32::from(state.effective_output(has_master).ok() == Some(OutputMode::MasterReference));
+        let master_volume = state.coherent_gain().map(GainDb::linear).unwrap_or(1.0);
         Self {
             state,
             has_master,
@@ -83,6 +85,7 @@ impl MixerRenderer {
             crossfade_frames: duration_frames(sample_rate, CROSSFADE_MILLISECONDS),
             gains,
             master_gain: LinearRamp::new(master),
+            master_volume: LinearRamp::new(master_volume),
             automation_count: 0,
             crossfade_count: 0,
             last_automation_reason: None,
@@ -134,12 +137,13 @@ impl MixerRenderer {
             stem[0] += left * gain;
             stem[1] += right * gain;
         }
+        let master_volume = self.master_volume.next();
         let master = if self.has_master {
             let left = self.finite(source[8]);
             let right = self.finite(source[9]);
             self.source_peak[0] = self.source_peak[0].max(left.abs());
             self.source_peak[1] = self.source_peak[1].max(right.abs());
-            [left, right]
+            [left * master_volume, right * master_volume]
         } else {
             [0.0; 2]
         };
@@ -159,6 +163,7 @@ impl MixerRenderer {
             gain.prime();
         }
         self.master_gain.prime();
+        self.master_volume.prime();
     }
 
     pub fn snapshot(&self) -> MixerSnapshot {
@@ -204,6 +209,11 @@ impl MixerRenderer {
             if ramp.target != target {
                 ramp.retarget(target, self.gain_ramp_frames);
             }
+        }
+        if let Some(target) = state.coherent_gain().map(GainDb::linear)
+            && self.master_volume.target != target
+        {
+            self.master_volume.retarget(target, self.gain_ramp_frames);
         }
         if old_mode != new_mode {
             self.master_gain.retarget(
@@ -300,6 +310,19 @@ mod tests {
         let after = mixer.render(&input)[0];
         assert!((after - (before + (1.0 - before) / 20.0)).abs() < 0.000_001);
         assert_eq!(mixer.snapshot().crossfade_count, 2);
+    }
+
+    #[test]
+    fn coherent_stem_gains_scale_the_master_reference() {
+        let mut mixer = MixerRenderer::new(1_000, true);
+        let gain = GainDb::new(-6.0).unwrap();
+        for role in StemRole::ALL {
+            mixer.set_gain(role, gain);
+        }
+        mixer.prime();
+        let output = mixer.render(&source([0.0; 4], 1.0));
+        assert!((output[0] - gain.linear()).abs() < 0.000_001);
+        assert_eq!(mixer.snapshot().output_mode, OutputMode::MasterReference);
     }
 
     #[test]

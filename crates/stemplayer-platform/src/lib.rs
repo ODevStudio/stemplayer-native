@@ -3,12 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use stemplayer_domain::{DeviceId, ErrorCode, PlayerError};
 use stemplayer_format::{SelectedFile, SourceGroup};
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
 pub const MAX_RECENT_SOURCES: usize = 8;
+pub const MAX_PLAYLIST_SOURCES: usize = 512;
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 const MAX_SETTING_TEXT_CHARS: usize = 4_096;
 
@@ -88,11 +90,14 @@ pub struct LocalSettings {
     pub selected_device: Option<String>,
     pub recent_sources_enabled: bool,
     pub recent_sources: Vec<String>,
+    pub playlist_sources: Vec<String>,
+    pub playlist_selected_source: Option<String>,
     pub theme: u8,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub window_x: Option<i32>,
     pub window_y: Option<i32>,
+    pub window_maximized: bool,
     pub waveform_cache_enabled: bool,
     pub waveform_cache_limit_mb: u32,
 }
@@ -105,11 +110,14 @@ impl Default for LocalSettings {
             selected_device: None,
             recent_sources_enabled: true,
             recent_sources: Vec::new(),
+            playlist_sources: Vec::new(),
+            playlist_selected_source: None,
             theme: 0,
             window_width: None,
             window_height: None,
             window_x: None,
             window_y: None,
+            window_maximized: false,
             waveform_cache_enabled: false,
             waveform_cache_limit_mb: 256,
         }
@@ -132,6 +140,14 @@ impl LocalSettings {
             .collect();
         Self {
             recent_sources,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_playlist(&self, sources: Vec<String>, selected_source: Option<String>) -> Self {
+        Self {
+            playlist_sources: sources,
+            playlist_selected_source: selected_source,
             ..self.clone()
         }
     }
@@ -188,7 +204,7 @@ pub fn load_settings(path: &Path) -> SettingsLoad {
         {
             SettingsLoad::Loaded(settings)
         }
-        Ok(settings) if settings.schema_version == 1 && valid_settings(&settings) => {
+        Ok(settings) if matches!(settings.schema_version, 1..=3) && valid_settings(&settings) => {
             SettingsLoad::Migrated(LocalSettings {
                 schema_version: SETTINGS_SCHEMA_VERSION,
                 ..settings
@@ -209,7 +225,43 @@ pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<(
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec(settings).map_err(std::io::Error::other)?;
-    fs::write(path, bytes)
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "serialized application settings exceed the bounded size",
+        ));
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("settings");
+    let suffix = std::process::id();
+    let temporary = path.with_file_name(format!(".{file_name}.{suffix}.tmp"));
+    let backup = path.with_file_name(format!(".{file_name}.{suffix}.bak"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+    if path.exists() {
+        if let Err(error) = fs::rename(path, &backup) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = fs::rename(&temporary, path) {
+            let _ = fs::rename(&backup, path);
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        let _ = fs::remove_file(backup);
+        Ok(())
+    } else {
+        fs::rename(temporary, path)
+    }
 }
 
 fn valid_settings(settings: &LocalSettings) -> bool {
@@ -222,6 +274,15 @@ fn valid_settings(settings: &LocalSettings) -> bool {
             .recent_sources
             .iter()
             .all(|value| valid_setting_text(value))
+        && settings.playlist_sources.len() <= MAX_PLAYLIST_SOURCES
+        && settings
+            .playlist_sources
+            .iter()
+            .all(|value| valid_setting_text(value))
+        && settings
+            .playlist_selected_source
+            .as_deref()
+            .is_none_or(valid_setting_text)
         && settings.theme <= 2
         && valid_window_size(settings.window_width, settings.window_height)
         && valid_window_position(settings.window_x, settings.window_y)
@@ -255,23 +316,69 @@ fn valid_setting_text(value: &str) -> bool {
 }
 
 pub fn select_local_source(selection: &Path) -> Result<SourceGroup, PlayerError> {
-    let root = if selection.is_dir() {
-        selection
-    } else {
-        let metadata = fs::symlink_metadata(selection)
-            .map_err(|error| selection_io_error("Selected manifest is unavailable", error))?;
-        let name = selection.file_name().and_then(|name| name.to_str());
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || !name.is_some_and(|name| name.eq_ignore_ascii_case("manifest.json"))
+    if selection.is_dir() {
+        let files = selected_files(selection, |_| true)?;
+        return if files
+            .iter()
+            .any(|file| file.basename().eq_ignore_ascii_case("manifest.json"))
         {
-            return Err(selection_error(
+            SourceGroup::new(source_display_name(selection), files)
+        } else {
+            SourceGroup::inferred(source_display_name(selection), files)
+        };
+    }
+    let metadata = fs::symlink_metadata(selection)
+        .map_err(|error| selection_io_error("Selected source is unavailable", error))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(selection_error(
+            ErrorCode::ManifestPathUnsafe,
+            "Selection must be a regular file or folder",
+        ));
+    }
+    let root = selection.parent().unwrap_or_else(|| Path::new("."));
+    let name = selection
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            selection_error(
                 ErrorCode::ManifestPathUnsafe,
-                "Selection must be a folder or manifest.json",
-            ));
-        }
-        selection.parent().unwrap_or_else(|| Path::new("."))
-    };
+                "Selected filename is not valid Unicode",
+            )
+        })?;
+    if selection
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return SourceGroup::with_manifest(
+            source_display_name(root),
+            selected_files(root, |_| true)?,
+            name,
+        );
+    }
+    if let Some(prefix) = wav_bundle_prefix(name) {
+        let files = selected_files(root, |candidate| {
+            wav_bundle_prefix(candidate).is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
+        })?;
+        return SourceGroup::inferred(
+            if prefix.is_empty() {
+                source_display_name(root)
+            } else {
+                prefix
+            },
+            files,
+        );
+    }
+    Err(selection_error(
+        ErrorCode::ManifestPathUnsafe,
+        "Selection must be JSON or a role-suffixed WAV file",
+    ))
+}
+
+fn selected_files(
+    root: &Path,
+    include: impl Fn(&str) -> bool,
+) -> Result<Vec<SelectedFile>, PlayerError> {
     let mut files = Vec::new();
     for entry in fs::read_dir(root)
         .map_err(|error| selection_io_error("Selected folder is unavailable", error))?
@@ -287,9 +394,29 @@ pub fn select_local_source(selection: &Path) -> Result<SourceGroup, PlayerError>
         let Ok(basename) = entry.file_name().into_string() else {
             continue;
         };
-        files.push(SelectedFile::new(basename, entry.path()));
+        if include(&basename) {
+            files.push(SelectedFile::new(basename, entry.path()));
+        }
     }
-    SourceGroup::new(source_display_name(root), files)
+    Ok(files)
+}
+
+fn wav_bundle_prefix(name: &str) -> Option<String> {
+    let path = Path::new(name);
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+    {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    let (prefix, role) = stem.rsplit_once('.').unwrap_or(("", stem));
+    matches!(
+        role.to_ascii_lowercase().as_str(),
+        "drums" | "bass" | "other" | "vocals" | "master"
+    )
+    .then(|| prefix.to_owned())
 }
 
 pub fn select_local_paths(paths: &[PathBuf]) -> Result<SourceGroup, PlayerError> {
@@ -328,7 +455,17 @@ pub fn select_local_paths(paths: &[PathBuf]) -> Result<SourceGroup, PlayerError>
             .to_owned();
         files.push(SelectedFile::new(basename, path.clone()));
     }
-    SourceGroup::new(source_display_name(root), files)
+    let manifest = paths.iter().find_map(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+            .then(|| path.file_name()?.to_str())
+            .flatten()
+    });
+    match manifest {
+        Some(manifest) => SourceGroup::with_manifest(source_display_name(root), files, manifest),
+        None => SourceGroup::inferred(source_display_name(root), files),
+    }
 }
 
 fn source_display_name(root: &Path) -> String {
@@ -408,6 +545,7 @@ mod tests {
         let settings = LocalSettings {
             diagnostics_visible: true,
             selected_device: Some("device-1".to_owned()),
+            window_maximized: true,
             ..LocalSettings::default()
         };
         save_settings(&path, &settings).unwrap();
@@ -422,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_migrate_v1_and_bound_recent_sources() {
+    fn settings_migrate_older_schemas_and_bound_recent_sources() {
         let path = test_path("migrate");
         fs::write(
             &path,
@@ -497,10 +635,64 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(other_root).unwrap();
     }
+
+    #[test]
+    fn arbitrary_json_and_role_suffixed_wav_are_selectable() {
+        let root = test_path("local-pattern");
+        fs::create_dir(&root).unwrap();
+        let manifest = root.join("song.json");
+        fs::write(&manifest, b"{}").unwrap();
+        assert!(
+            select_local_source(&manifest)
+                .unwrap()
+                .manifest_reader()
+                .unwrap()
+                .is_some()
+        );
+
+        fs::remove_file(&manifest).unwrap();
+        let bass = root.join("song.bass.wav");
+        fs::write(&bass, b"RIFF").unwrap();
+        let group = select_local_source(&bass).unwrap();
+        assert_eq!(group.display_name(), "song");
+        assert!(group.manifest_reader().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn application_name_is_validated() {
         assert!(AppPaths::discover("").is_err());
         assert!(AppPaths::discover("../private").is_err());
         assert!(AppPaths::discover("stemplayer-native").is_ok());
+    }
+    #[test]
+    fn playlist_settings_migrate_round_trip_and_preserve_previous_on_oversize() {
+        let migration = test_path("playlist-migrate");
+        fs::write(&migration, br#"{"schema_version":3}"#).unwrap();
+        let migrated = load_settings(&migration);
+        assert!(matches!(migrated, SettingsLoad::Migrated(_)));
+        assert!(migrated.settings().playlist_sources.is_empty());
+        fs::remove_file(migration).unwrap();
+
+        let path = test_path("playlist-save");
+        let original = LocalSettings::default().with_playlist(
+            vec![
+                "C:\\music\\first.mp3".to_owned(),
+                "C:\\music\\second.flac".to_owned(),
+            ],
+            Some("C:\\music\\second.flac".to_owned()),
+        );
+        save_settings(&path, &original).unwrap();
+        assert_eq!(load_settings(&path).settings(), &original);
+
+        let oversized = original.with_playlist(
+            (0..32)
+                .map(|index| format!("C:\\music\\{index}-{}.mp3", "x".repeat(4_000)))
+                .collect(),
+            None,
+        );
+        assert!(save_settings(&path, &oversized).is_err());
+        assert_eq!(load_settings(&path).settings(), &original);
+        fs::remove_file(path).unwrap();
     }
 }

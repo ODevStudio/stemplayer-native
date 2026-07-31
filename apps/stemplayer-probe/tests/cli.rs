@@ -113,9 +113,15 @@ fn later_phase_command_surface_has_stable_unsupported_errors() {
         &["render", "fixture", "output.wav"][..],
         &["benchmark", "fixture"][..],
         &["cache-inspect", "cache"][..],
-        &["hls-validate", "https://example.invalid/stemset.json"][..],
     ] {
         let output = probe(arguments);
+        assert_eq!(output.status.code(), Some(4));
+        let value: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(value["code"], "E_PLAYBACK_FEATURE_UNSUPPORTED");
+    }
+    #[cfg(not(feature = "hls"))]
+    {
+        let output = probe(&["hls-validate", "https://example.invalid/stemset.json"]);
         assert_eq!(output.status.code(), Some(4));
         let value: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(value["code"], "E_PLAYBACK_FEATURE_UNSUPPORTED");

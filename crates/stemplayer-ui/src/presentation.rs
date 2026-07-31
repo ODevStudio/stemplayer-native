@@ -73,7 +73,7 @@ pub struct PresentationModel {
     pub source_summary: String,
     pub device_name: String,
     pub output_rate_text: String,
-    pub waveform_text: &'static str,
+    pub waveform_text: String,
     pub diagnostics_count: usize,
     pub diagnostics_text: String,
 }
@@ -97,6 +97,70 @@ impl PresentationModel {
             })
             .unwrap_or(Microseconds::new(0));
         let details = snapshot.details();
+        let waveform_cache = format!("{:?}", details.waveform_cache).to_ascii_lowercase();
+        let waveform_text = match details.waveform {
+            WaveformState::Unavailable => "Waveform unavailable".to_owned(),
+            WaveformState::Analyzing => format!(
+                "Analyzing waveform: {}%{}",
+                details.waveform_progress_percent,
+                if details.waveform_throttled {
+                    " (paused for playback)"
+                } else {
+                    ""
+                }
+            ),
+            WaveformState::Ready => "Waveform ready".to_owned(),
+        };
+        let source_diagnostics = details.network_diagnostics.as_ref().map_or_else(
+            || {
+                details.source_diagnostics.as_ref().map_or_else(
+                    || {
+                        format!(
+                            "{} | {}",
+                            state_text(snapshot.transport_state()),
+                            output_mode(details.mixer.output_preference, details.mixer.output_mode)
+                        )
+                    },
+                    |diagnostics| {
+                        format!(
+                            "{} | {} | metadata {} B | media {} B | queue {} | seek {} packets, {} discarded frames, {} us",
+                            diagnostics.container,
+                            diagnostics.tracks,
+                            diagnostics.metadata_read_bytes,
+                            diagnostics.media_read_bytes,
+                            diagnostics.maximum_pending_blocks,
+                            diagnostics.seek_packet_count,
+                            diagnostics.seek_discarded_frames,
+                            diagnostics.seek_latency_us
+                        )
+                    },
+                )
+            },
+            |diagnostics| {
+                format!(
+                    "{} | group {:?} | fetches {} ({} failed) | ready {} us | buffering {} | cache {}/{} B | preroll {} frames | offset {} frames",
+                    diagnostics.redacted_source,
+                    diagnostics.current_group,
+                    diagnostics.fetch_count,
+                    diagnostics.fetch_failures,
+                    diagnostics.group_ready_us,
+                    diagnostics.buffering_count,
+                    diagnostics.cache_bytes,
+                    diagnostics.peak_cache_bytes,
+                    diagnostics.discarded_preroll_frames,
+                    diagnostics.inter_stem_offset_frames
+                )
+            },
+        );
+        let diagnostics_text = format!(
+            "{source_diagnostics} | waveform {}% | cache {waveform_cache}{}",
+            details.waveform_progress_percent,
+            if details.waveform_throttled {
+                " | analysis paused for playback"
+            } else {
+                ""
+            }
+        );
         Self {
             transport: TransportAvailability::from_state(
                 snapshot.transport_state(),
@@ -130,7 +194,10 @@ impl PresentationModel {
                 .error
                 .as_ref()
                 .and_then(|error| error.user_action.as_ref())
-                .map_or_else(|| "Try again or choose another source".to_owned(), ToString::to_string),
+                .map_or_else(
+                    || "Try again or choose another source".to_owned(),
+                    ToString::to_string,
+                ),
             error_code: details
                 .error
                 .as_ref()
@@ -168,26 +235,9 @@ impl PresentationModel {
                 },
                 |resampler| format!("Output {} Hz", resampler.output_rate),
             ),
-            waveform_text: match details.waveform {
-                WaveformState::Unavailable => "Waveform unavailable",
-                WaveformState::Analyzing => "Analyzing waveform",
-                WaveformState::Ready => "Waveform ready",
-            },
+            waveform_text,
             diagnostics_count: snapshot.diagnostics().len(),
-            diagnostics_text: details.source_diagnostics.as_ref().map_or_else(
-                || format!("{} | {}", state_text(snapshot.transport_state()), output_mode(details.mixer.output_preference, details.mixer.output_mode)),
-                |diagnostics| format!(
-                    "{} | {} | metadata {} B | media {} B | queue {} | seek {} packets, {} discarded frames, {} us",
-                    diagnostics.container,
-                    diagnostics.tracks,
-                    diagnostics.metadata_read_bytes,
-                    diagnostics.media_read_bytes,
-                    diagnostics.maximum_pending_blocks,
-                    diagnostics.seek_packet_count,
-                    diagnostics.seek_discarded_frames,
-                    diagnostics.seek_latency_us
-                ),
-            ),
+            diagnostics_text,
         }
     }
 }
@@ -244,6 +294,7 @@ fn source_summary(source: &stemplayer_domain::SourceMetadata) -> String {
     let kind = match source.kind {
         SourceKind::StudioWavBundle => "Studio WAV",
         SourceKind::LocalStemContainer => "Stem container",
+        SourceKind::LocalAudioFile => "Audio file",
         SourceKind::HlsStemset => "HLS stemset",
     };
     format!(

@@ -40,6 +40,7 @@ stemplayer-output.workspace = true
 stemplayer-platform.workspace = true
 stemplayer-timeline.workspace = true
 stemplayer-ui.workspace = true
+stemplayer-waveform.workspace = true
 
 
 [target.'cfg(target_os = "windows")'.dependencies]

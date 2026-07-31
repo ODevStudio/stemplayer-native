@@ -51,5 +51,6 @@ pub enum OutputPreference {
 pub enum SourceKind {
     StudioWavBundle,
     LocalStemContainer,
+    LocalAudioFile,
     HlsStemset,
 }

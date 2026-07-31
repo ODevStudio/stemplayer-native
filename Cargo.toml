@@ -59,9 +59,11 @@ stemplayer-output = { path = "crates/stemplayer-output" }
 stemplayer-platform = { path = "crates/stemplayer-platform" }
 stemplayer-timeline = { path = "crates/stemplayer-timeline" }
 stemplayer-ui = { path = "crates/stemplayer-ui" }
-symphonia = { version = "=0.6.0", default-features = false, features = ["aac", "alac", "isomp4"] }
+symphonia = { version = "=0.6.0", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 stemplayer-waveform = { path = "crates/stemplayer-waveform" }
 unicode-normalization = "=0.1.25"
+ureq = { version = "=3.3.0", default-features = false, features = ["rustls"] }
+url = "=2.5.8"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

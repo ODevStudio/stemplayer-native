@@ -1,12 +1,14 @@
 #![deny(unsafe_code)]
 
 mod compressed;
+mod segment;
 
 pub use compressed::{
     CompressedCodec, CompressedContainer, CompressedContainerTrack, CompressedDecodeDiagnostics,
-    CompressedTrackDecoder, CompressedTrackInfo, CompressedWindow, inspect_compressed_container,
-    inspect_compressed_tracks,
+    CompressedTrackDecoder, CompressedTrackInfo, CompressedWindow, inspect_audio_file,
+    inspect_compressed_container, inspect_compressed_tracks,
 };
+pub use segment::{DecodedSegment, decode_aac_segment};
 
 use serde::Serialize;
 use std::sync::atomic::AtomicBool;

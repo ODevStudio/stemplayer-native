@@ -85,9 +85,17 @@ impl MixerState {
             .all(|control| *control == StemControl::default())
     }
 
+    pub fn coherent_gain(self) -> Option<GainDb> {
+        let gain = self.controls[0].gain_db;
+        self.controls
+            .iter()
+            .all(|control| !control.muted && !control.solo && control.gain_db == gain)
+            .then_some(gain)
+    }
+
     pub fn effective_output(self, has_master: bool) -> Result<OutputMode, PlayerError> {
         match self.preference {
-            OutputPreference::Automatic if has_master && self.is_neutral() => {
+            OutputPreference::Automatic if has_master && self.coherent_gain().is_some() => {
                 Ok(OutputMode::MasterReference)
             }
             OutputPreference::Automatic | OutputPreference::StemMix => Ok(OutputMode::StemMix),
@@ -163,6 +171,13 @@ mod tests {
             modified.effective_output(true).unwrap(),
             OutputMode::StemMix
         );
+        let coherent = StemRole::ALL.into_iter().fold(neutral, |state, role| {
+            state.with_gain(role, GainDb::new(-3.0).unwrap())
+        });
+        assert_eq!(
+            coherent.effective_output(true).unwrap(),
+            OutputMode::MasterReference
+        );
         assert_eq!(
             modified.reset().effective_output(true).unwrap(),
             OutputMode::MasterReference
@@ -235,7 +250,9 @@ mod tests {
                             }
                             let selected = selected.unwrap();
                             let expected = match preference {
-                                OutputPreference::Automatic if has_master && state.is_neutral() => {
+                                OutputPreference::Automatic
+                                    if has_master && state.coherent_gain().is_some() =>
+                                {
                                     OutputMode::MasterReference
                                 }
                                 OutputPreference::MasterReference => OutputMode::MasterReference,

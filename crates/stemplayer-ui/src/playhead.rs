@@ -40,6 +40,7 @@ impl Playhead {
         if explicit_jump || next.frame >= self.visible_frame(observed_at) {
             *self = next;
         } else {
+            self.frame = self.visible_frame(observed_at);
             self.observed_at = observed_at;
             self.moving = next.moving;
             self.end_frame = next.end_frame;
@@ -115,5 +116,21 @@ mod tests {
             start + Duration::from_millis(500),
         );
         assert!(!playhead.repaint_needed(true));
+    }
+
+    #[test]
+    fn stale_snapshot_does_not_move_visible_frame_backward() {
+        let start = Duration::from_secs(5);
+        let mut playhead =
+            Playhead::from_snapshot(&snapshot(TransportState::Playing, 1_000), start);
+        let observed_at = start + Duration::from_millis(500);
+
+        playhead.update(&snapshot(TransportState::Playing, 1_400), observed_at);
+
+        assert_eq!(playhead.visible_frame(observed_at), SourceFrame::new(1_500));
+        assert_eq!(
+            playhead.visible_frame(observed_at + Duration::from_millis(100)),
+            SourceFrame::new(1_600)
+        );
     }
 }

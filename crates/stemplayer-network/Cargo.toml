@@ -8,10 +8,18 @@ publish = false
 
 [features]
 default = []
-hls = []
+hls = ["dep:ureq", "dep:url"]
 
 [dependencies]
 stemplayer-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stemplayer-decode.workspace = true
+stemplayer-engine.workspace = true
+stemplayer-timeline.workspace = true
+unicode-normalization.workspace = true
+ureq = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [lints]
 workspace = true

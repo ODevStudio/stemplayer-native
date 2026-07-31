@@ -233,7 +233,12 @@ impl MockController {
                 }
             }
             PlayerCommand::Cache(
-                CacheCommand::Clear | CacheCommand::Enable | CacheCommand::Disable,
+                CacheCommand::ClearCurrent
+                | CacheCommand::ClearAll
+                | CacheCommand::ClearNetworkSource
+                | CacheCommand::SetCapacityBytes(_)
+                | CacheCommand::Enable
+                | CacheCommand::Disable,
             )
             | PlayerCommand::Cancel(_) => {}
             PlayerCommand::Shutdown => state.transport = TransportState::Closed,
@@ -304,7 +309,11 @@ fn snapshot(state: &MockState) -> PlayerSnapshot {
         overflow_count: 0,
         resampler: None,
         source_diagnostics: None,
+        network_diagnostics: None,
         waveform: state.waveform,
+        waveform_progress_percent: 0,
+        waveform_cache: Default::default(),
+        waveform_throttled: false,
         error: state.error.clone(),
     };
     PlayerSnapshot::new(

@@ -1,0 +1,170 @@
+import { Button, Palette, ScrollView } from "std-widgets.slint";
+
+export component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 34px;
+    height: 32px;
+
+    Button {
+        width: parent.width;
+        height: parent.height;
+        text: "";
+        enabled: root.enabled;
+        accessible-label: root.label;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.glyph;
+        font-family: "Segoe Fluent Icons";
+        font-size: 16px;
+        color: root.enabled ? Palette.foreground : Palette.foreground.with-alpha(0.4);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Tooltip { text: @markdown("\{root.label}"); }
+}
+
+export struct PlaylistRow {
+    label: string,
+    selected: bool,
+}
+
+export component PlaylistPanel inherits Rectangle {
+    in property <[PlaylistRow]> items;
+    in-out property <int> selected-index: 0;
+    in-out property <bool> expanded: true;
+    in property <string> cache-progress: "";
+    callback selected(int, bool, bool);
+    callback context-selected(int);
+    callback activated(int);
+    callback select-all();
+    callback remove-selected();
+    min-height: 34px;
+    preferred-height: root.expanded ? min(190px, 34px + root.items.length * 28px) : 34px;
+    max-height: root.expanded ? 100000px : 34px;
+    vertical-stretch: root.expanded ? 1 : 0;
+    background: Palette.alternate-background;
+    border-color: Palette.border;
+    border-width: 1px;
+    border-radius: 3px;
+    accessible-role: list;
+    accessible-label: "Track list";
+
+    IconButton {
+        x: 2px;
+        y: 1px;
+        width: 30px;
+        height: 30px;
+        glyph: root.expanded ? "\u{E70E}" : "\u{E70D}";
+        label: root.expanded ? "Collapse track list" : "Expand track list";
+        clicked => { root.expanded = !root.expanded; }
+    }
+    Text {
+        x: 38px;
+        y: 1px;
+        z: 2;
+        width: parent.width - 44px - (root.cache-progress == "" ? 0px : 52px);
+        height: 32px;
+        text: root.items.length == 0 || root.selected-index < 0
+            ? "No track selected"
+            : root.items[root.selected-index].label;
+        color: Palette.foreground;
+        font-size: 12px;
+        font-weight: 600;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.cache-progress != "": Text {
+        x: parent.width - 50px;
+        y: 1px;
+        z: 2;
+        width: 44px;
+        height: 32px;
+        text: root.cache-progress;
+        color: Palette.foreground;
+        font-size: 12px;
+        font-weight: 600;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    if root.expanded: list-focus := FocusScope {
+        x: 2px;
+        y: 34px;
+        width: parent.width - 4px;
+        height: parent.height - 36px;
+        KeyBinding { keys: @keys(Control + A); activated => { root.select-all(); } }
+        KeyBinding { keys: @keys(Delete); activated => { root.remove-selected(); } }
+        ScrollView {
+            width: parent.width;
+            height: parent.height;
+            vertical-scrollbar-policy: ScrollBarPolicy.always-on;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            VerticalLayout {
+                spacing: 1px;
+                for item[index] in root.items: row := Rectangle {
+                    height: 27px;
+                    background: item.selected ? Palette.selection-background : row-area.has-hover ? Palette.background : transparent;
+                    accessible-role: list-item;
+                    accessible-label: item.label;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        height: parent.height;
+                        text: item.label;
+                        color: item.selected ? Palette.selection-foreground : Palette.foreground;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    row-area := TouchArea {
+                        double-clicked => {
+                            list-focus.focus();
+                            root.activated(index);
+                        }
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                                list-focus.focus();
+                                root.selected(index, event.modifiers.control, event.modifiers.shift);
+                            } else if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                                list-focus.focus();
+                                root.context-selected(index);
+                                remove-popup.show();
+                            }
+                        }
+                        remove-popup := PopupWindow {
+                            x: min(
+                                row-area.absolute-position.x + row-area.mouse-x - root.absolute-position.x,
+                                root.width - self.width,
+                            );
+                            y: row-area.absolute-position.y + row-area.mouse-y - root.absolute-position.y;
+                            width: 120px;
+                            height: 36px;
+
+                            popup-focus := FocusScope {
+                                width: parent.width;
+                                height: parent.height;
+                                KeyBinding { keys: @keys(Escape); activated => { remove-popup.close(); } }
+
+                                Button {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text: "Remove";
+                                    clicked => {
+                                        remove-popup.close();
+                                        root.remove-selected();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -110,7 +110,9 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Fail
         "decode-window" => studio_decode_window(args),
         "playback-sim" => playback_sim(args),
         "container-seek-test" => container_seek_test(args),
-        "benchmark" | "cache-inspect" | "hls-validate" => {
+        "hls-validate" => hls_validate(args),
+        "hls-playback-sim" => hls_playback_sim(args),
+        "benchmark" | "cache-inspect" => {
             require_arguments(&mut args, 1, command.as_str())?;
             Err(feature_error(command.as_str()))
         }
@@ -120,6 +122,109 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Fail
         }
         _ => Err(usage_error()),
     }
+}
+
+#[cfg(feature = "hls")]
+fn hls_validate(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Failure> {
+    let url = args.next().ok_or_else(usage_error)?;
+    if args.next().is_some() {
+        return Err(usage_error());
+    }
+    let client = stemplayer_network::HlsClient::new(
+        std::sync::Arc::new(stemplayer_network::UreqTransport::default()),
+        cfg!(debug_assertions),
+    );
+    let source = client
+        .open(&url, &std::sync::atomic::AtomicBool::new(false))
+        .map_err(Failure::Validation)?;
+    Ok(serde_json::json!({
+        "title": source.title(),
+        "sample_rate": source.sample_rate(),
+        "frames": source.frames(),
+        "has_master": source.has_master(),
+        "waveform_peaks": source.waveforms().iter().map(|waveform| waveform.minimum.len()).collect::<Vec<_>>(),
+        "diagnostics": source.diagnostics()
+    }))
+}
+
+#[cfg(feature = "hls")]
+fn hls_playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Failure> {
+    let url = args.next().ok_or_else(usage_error)?;
+    if args.next().is_some() {
+        return Err(usage_error());
+    }
+    let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client = stemplayer_network::HlsClient::new(
+        std::sync::Arc::new(stemplayer_network::UreqTransport::default()),
+        cfg!(debug_assertions),
+    );
+    let source = client
+        .open(&url, &cancellation)
+        .map_err(Failure::Validation)?;
+    let session = stemplayer_engine::PlaybackSession::new_external(
+        source.title(),
+        source.sample_rate(),
+        source.frames(),
+        source.has_master(),
+        stemplayer_domain::GenerationId::INITIAL,
+        std::sync::Arc::clone(&source) as std::sync::Arc<dyn stemplayer_engine::ExternalSource>,
+    )
+    .map_err(Failure::Internal)?;
+    let mut engine = stemplayer_engine::PlaybackEngine::with_cancellation(session, cancellation)
+        .map_err(Failure::Internal)?;
+    engine.play().map_err(Failure::Internal)?;
+    let mut output = [stemplayer_output::StereoFrame::default(); 4096];
+    let mut rendered = 0_u64;
+    while !engine.source_exhausted() {
+        engine.refill().map_err(Failure::Internal)?;
+        let frames = engine.render(&mut output).map_err(Failure::Internal)?;
+        if frames == 0 {
+            return Err(Failure::Internal(PlayerError::new(
+                ErrorCode::HlsGroupBufferingTimeout,
+                "HLS playback simulation made no progress",
+            )));
+        }
+        rendered = rendered.saturating_add(frames as u64);
+    }
+    engine
+        .finish_if_output_drained(0)
+        .map_err(Failure::Internal)?;
+    let end_frame = engine.position().get();
+    let seek_targets = [0, source.frames() / 2, source.frames().saturating_sub(4096)];
+    for target in seek_targets {
+        engine
+            .seek(stemplayer_domain::SourceFrame::new(target as i64))
+            .map_err(Failure::Internal)?;
+        engine.play().map_err(Failure::Internal)?;
+        engine.refill().map_err(Failure::Internal)?;
+        if engine.render(&mut output).map_err(Failure::Internal)? == 0 {
+            return Err(Failure::Internal(PlayerError::new(
+                ErrorCode::HlsGroupBufferingTimeout,
+                "HLS seek did not produce audio",
+            )));
+        }
+        engine.pause().map_err(Failure::Internal)?;
+    }
+    Ok(serde_json::json!({
+        "frames": source.frames(),
+        "rendered_frames": rendered,
+        "end_frame": end_frame,
+        "state": "ended",
+        "seek_targets": seek_targets,
+        "diagnostics": source.diagnostics()
+    }))
+}
+
+#[cfg(not(feature = "hls"))]
+fn hls_validate(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Failure> {
+    require_arguments(&mut args, 1, "hls-validate")?;
+    Err(feature_error("hls-validate"))
+}
+
+#[cfg(not(feature = "hls"))]
+fn hls_playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Failure> {
+    require_arguments(&mut args, 1, "hls-playback-sim")?;
+    Err(feature_error("hls-playback-sim"))
 }
 
 fn playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json::Value, Failure> {
@@ -533,7 +638,7 @@ fn validation_error(summary: &str) -> Failure {
 fn usage_error() -> Failure {
     Failure::Usage(PlayerError::new(
         ErrorCode::ValueOutOfRange,
-        "Expected version, validate-config, devices, output-test, callback-audit, device-reopen-test, device-recovery-test, inspect, container-inspect, container-structure, container-seek-test, validate, decode-window, render, playback-sim, benchmark, cache-inspect, or hls-validate",
+        "Expected version, validate-config, devices, output-test, callback-audit, device-reopen-test, device-recovery-test, inspect, container-inspect, container-structure, container-seek-test, validate, decode-window, render, playback-sim, benchmark, cache-inspect, hls-validate, or hls-playback-sim",
     ))
 }
 

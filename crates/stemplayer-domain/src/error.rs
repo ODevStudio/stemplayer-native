@@ -102,6 +102,30 @@ pub enum ErrorCode {
     BundleInconsistent,
     #[serde(rename = "E_BUNDLE_ABORTED")]
     BundleAborted,
+    #[serde(rename = "E_HLS_STEMSET_INVALID")]
+    HlsStemsetInvalid,
+    #[serde(rename = "E_HLS_ROLE_MISSING")]
+    HlsRoleMissing,
+    #[serde(rename = "E_HLS_TIMELINE_MISMATCH")]
+    HlsTimelineMismatch,
+    #[serde(rename = "E_HLS_SEGMENT_BOUNDARY_MISMATCH")]
+    HlsSegmentBoundaryMismatch,
+    #[serde(rename = "E_HLS_URL_UNSAFE")]
+    HlsUrlUnsafe,
+    #[serde(rename = "E_HLS_RESPONSE_TOO_LARGE")]
+    HlsResponseTooLarge,
+    #[serde(rename = "E_HLS_HTTP_FAILED")]
+    HlsHttpFailed,
+    #[serde(rename = "E_HLS_TLS_FAILED")]
+    HlsTlsFailed,
+    #[serde(rename = "E_HLS_REDIRECT_REJECTED")]
+    HlsRedirectRejected,
+    #[serde(rename = "E_HLS_GROUP_BUFFERING_TIMEOUT")]
+    HlsGroupBufferingTimeout,
+    #[serde(rename = "E_HLS_HASH_MISMATCH")]
+    HlsHashMismatch,
+    #[serde(rename = "E_HLS_CODEC_UNSUPPORTED")]
+    HlsCodecUnsupported,
     #[serde(rename = "E_VALUE_OUT_OF_RANGE")]
     ValueOutOfRange,
     #[serde(rename = "E_INTERNAL")]
@@ -109,7 +133,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 61] = [
         Self::TransportStateInvalid,
         Self::PlaybackSessionClosed,
         Self::PlaybackNotReady,
@@ -157,6 +181,18 @@ impl ErrorCode {
         Self::WavPcmInvalid,
         Self::BundleInconsistent,
         Self::BundleAborted,
+        Self::HlsStemsetInvalid,
+        Self::HlsRoleMissing,
+        Self::HlsTimelineMismatch,
+        Self::HlsSegmentBoundaryMismatch,
+        Self::HlsUrlUnsafe,
+        Self::HlsResponseTooLarge,
+        Self::HlsHttpFailed,
+        Self::HlsTlsFailed,
+        Self::HlsRedirectRejected,
+        Self::HlsGroupBufferingTimeout,
+        Self::HlsHashMismatch,
+        Self::HlsCodecUnsupported,
         Self::ValueOutOfRange,
         Self::Internal,
     ];
@@ -210,6 +246,18 @@ impl ErrorCode {
             Self::WavPcmInvalid => "E_WAV_PCM_INVALID",
             Self::BundleInconsistent => "E_BUNDLE_INCONSISTENT",
             Self::BundleAborted => "E_BUNDLE_ABORTED",
+            Self::HlsStemsetInvalid => "E_HLS_STEMSET_INVALID",
+            Self::HlsRoleMissing => "E_HLS_ROLE_MISSING",
+            Self::HlsTimelineMismatch => "E_HLS_TIMELINE_MISMATCH",
+            Self::HlsSegmentBoundaryMismatch => "E_HLS_SEGMENT_BOUNDARY_MISMATCH",
+            Self::HlsUrlUnsafe => "E_HLS_URL_UNSAFE",
+            Self::HlsResponseTooLarge => "E_HLS_RESPONSE_TOO_LARGE",
+            Self::HlsHttpFailed => "E_HLS_HTTP_FAILED",
+            Self::HlsTlsFailed => "E_HLS_TLS_FAILED",
+            Self::HlsRedirectRejected => "E_HLS_REDIRECT_REJECTED",
+            Self::HlsGroupBufferingTimeout => "E_HLS_GROUP_BUFFERING_TIMEOUT",
+            Self::HlsHashMismatch => "E_HLS_HASH_MISMATCH",
+            Self::HlsCodecUnsupported => "E_HLS_CODEC_UNSUPPORTED",
             Self::ValueOutOfRange => "E_VALUE_OUT_OF_RANGE",
             Self::Internal => "E_INTERNAL",
         }
@@ -262,7 +310,19 @@ impl ErrorCode {
             | Self::WavDataTruncated
             | Self::WavPcmInvalid
             | Self::BundleInconsistent
-            | Self::BundleAborted => ErrorCategory::Source,
+            | Self::BundleAborted
+            | Self::HlsStemsetInvalid
+            | Self::HlsRoleMissing
+            | Self::HlsTimelineMismatch
+            | Self::HlsSegmentBoundaryMismatch
+            | Self::HlsUrlUnsafe
+            | Self::HlsResponseTooLarge
+            | Self::HlsHashMismatch
+            | Self::HlsCodecUnsupported => ErrorCategory::Source,
+            Self::HlsHttpFailed
+            | Self::HlsTlsFailed
+            | Self::HlsRedirectRejected
+            | Self::HlsGroupBufferingTimeout => ErrorCategory::Network,
             Self::ValueOutOfRange | Self::Internal => ErrorCategory::Internal,
         }
     }
@@ -275,6 +335,7 @@ pub enum ErrorCategory {
     Mixer,
     Timeline,
     Source,
+    Network,
     Internal,
 }
 

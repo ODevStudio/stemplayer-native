@@ -1,9 +1,10 @@
 use crate::hashing::{HashProgress, verify_sha256};
-use crate::manifest::{ManifestTrack, parse_manifest};
+use crate::manifest::{ManifestTrack, StudioManifest, parse_manifest};
 use crate::source::{BoundedReader, SourceGroup, normalized_key, source_error};
 use crate::wav::{SampleEncoding, WaveInfo, inspect_wave};
 use serde::Serialize;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::SyncSender;
 use stemplayer_domain::{ErrorCode, PlayerError};
@@ -107,17 +108,21 @@ impl StudioBundle {
         cancelled: &AtomicBool,
         progress: Option<&SyncSender<HashProgress>>,
     ) -> Result<Self, PlayerError> {
-        let mut manifest_reader = group.manifest_reader()?;
-        if manifest_reader.identity().len() > crate::MAX_MANIFEST_BYTES as u64 {
-            return Err(source_error(
-                ErrorCode::ManifestTooLarge,
-                "Manifest exceeds the 1 MiB limit",
-            ));
-        }
-        let mut manifest_bytes = vec![0_u8; manifest_reader.identity().len() as usize];
-        manifest_reader.read_exact_at(0, &mut manifest_bytes, cancelled)?;
-        let manifest_bytes_read = manifest_reader.bytes_read();
-        let manifest = parse_manifest(&manifest_bytes)?;
+        let (manifest, manifest_bytes_read) = match group.manifest_reader()? {
+            Some(mut manifest_reader) => {
+                if manifest_reader.identity().len() > crate::MAX_MANIFEST_BYTES as u64 {
+                    return Err(source_error(
+                        ErrorCode::ManifestTooLarge,
+                        "Manifest exceeds the 1 MiB limit",
+                    ));
+                }
+                let mut manifest_bytes = vec![0_u8; manifest_reader.identity().len() as usize];
+                manifest_reader.read_exact_at(0, &mut manifest_bytes, cancelled)?;
+                let manifest = parse_manifest(&manifest_bytes)?;
+                (manifest, manifest_reader.bytes_read())
+            }
+            None => (infer_manifest(&group)?, 0),
+        };
 
         let mut names = BTreeSet::new();
         let mut tracks = Vec::with_capacity(manifest.tracks.len());
@@ -228,6 +233,78 @@ impl StudioBundle {
         reader.ensure_identity(&track.info.identity)?;
         Ok(reader)
     }
+
+    pub fn fingerprint_inputs(&self) -> Vec<(String, PathBuf)> {
+        let mut inputs = self.group.manifest_path().map_or_else(Vec::new, |path| {
+            vec![("studio-manifest-v1".to_owned(), path.to_path_buf())]
+        });
+        inputs.extend(self.tracks.iter().filter_map(|track| {
+            self.group.path(&track.filename).map(|path| {
+                (
+                    format!(
+                        "{:?}:{}:{}:{:?}",
+                        track.role, track.info.sample_rate, track.info.frames, track.info.encoding
+                    ),
+                    path.to_path_buf(),
+                )
+            })
+        }));
+        inputs
+    }
+}
+
+fn infer_manifest(group: &SourceGroup) -> Result<StudioManifest, PlayerError> {
+    let mut tracks = Vec::new();
+    for filename in group.filenames() {
+        let Some(role) = inferred_role(filename) else {
+            continue;
+        };
+        if tracks
+            .iter()
+            .any(|track: &ManifestTrack| track.role == role)
+        {
+            return Err(source_error(
+                ErrorCode::ManifestRoleDuplicate,
+                "Inferred WAV bundle contains a role more than once",
+            ));
+        }
+        tracks.push(ManifestTrack {
+            role,
+            filename: filename.to_owned(),
+            sample_rate: None,
+            channels: None,
+            frames: None,
+            subtype: None,
+            sha256: None,
+        });
+    }
+    for role in StudioRole::STEMS {
+        if !tracks.iter().any(|track| track.role == role) {
+            return Err(source_error(
+                ErrorCode::ManifestRoleMissing,
+                "Inferred WAV bundle is missing a required stem role",
+            ));
+        }
+    }
+    Ok(StudioManifest {
+        schema_version: 1,
+        tracks,
+        ignored_outputs: Vec::new(),
+        unknown_fields: Vec::new(),
+    })
+}
+
+fn inferred_role(filename: &str) -> Option<StudioRole> {
+    let path = std::path::Path::new(filename);
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+    {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    StudioRole::parse(stem.rsplit('.').next()?.to_ascii_lowercase().as_str())
 }
 
 fn validate_declaration(declared: &ManifestTrack, info: &WaveInfo) -> Result<(), PlayerError> {
@@ -253,4 +330,32 @@ fn validate_declaration(declared: &ManifestTrack, info: &WaveInfo) -> Result<(),
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod inferred_tests {
+    use super::*;
+    use crate::SelectedFile;
+
+    #[test]
+    fn role_suffixed_wav_names_form_a_manifest() {
+        let files = [
+            "song.drums.wav",
+            "song.bass.wav",
+            "song.other.wav",
+            "song.vocals.wav",
+        ]
+        .into_iter()
+        .map(|name| SelectedFile::new(name.to_owned(), PathBuf::from(name)))
+        .collect();
+        let group = SourceGroup::inferred("song".to_owned(), files).unwrap();
+        let manifest = infer_manifest(&group).unwrap();
+        assert_eq!(manifest.tracks.len(), 4);
+        assert!(
+            manifest
+                .tracks
+                .iter()
+                .any(|track| track.role == StudioRole::Bass)
+        );
+    }
 }

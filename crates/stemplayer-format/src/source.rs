@@ -41,18 +41,46 @@ impl SelectedFile {
     pub fn new(basename: String, path: PathBuf) -> Self {
         Self { basename, path }
     }
+
+    pub fn basename(&self) -> &str {
+        &self.basename
+    }
 }
 
 pub struct SourceGroup {
     display_name: String,
     files: BTreeMap<String, SelectedFile>,
-    manifest_key: String,
+    manifest_key: Option<String>,
 }
 
 impl SourceGroup {
     pub fn new(
         display_name: String,
         selected_files: Vec<SelectedFile>,
+    ) -> Result<Self, PlayerError> {
+        Self::with_manifest(display_name, selected_files, "manifest.json")
+    }
+
+    pub fn with_manifest(
+        display_name: String,
+        selected_files: Vec<SelectedFile>,
+        manifest_name: &str,
+    ) -> Result<Self, PlayerError> {
+        let manifest_key = normalized_key(manifest_name)?;
+        Self::build(display_name, selected_files, Some(manifest_key))
+    }
+
+    pub fn inferred(
+        display_name: String,
+        selected_files: Vec<SelectedFile>,
+    ) -> Result<Self, PlayerError> {
+        Self::build(display_name, selected_files, None)
+    }
+
+    fn build(
+        display_name: String,
+        selected_files: Vec<SelectedFile>,
+        manifest_key: Option<String>,
     ) -> Result<Self, PlayerError> {
         let mut files = BTreeMap::new();
         for selected in selected_files {
@@ -66,11 +94,13 @@ impl SourceGroup {
                 ));
             }
         }
-        let manifest_key = normalized_key("manifest.json")?;
-        if !files.contains_key(&manifest_key) {
+        if manifest_key
+            .as_ref()
+            .is_some_and(|manifest_key| !files.contains_key(manifest_key))
+        {
             return Err(source_error(
                 ErrorCode::ManifestFileMissing,
-                "The selected source has no manifest.json",
+                "The selected source has no chosen manifest",
             ));
         }
         Ok(Self {
@@ -80,8 +110,11 @@ impl SourceGroup {
         })
     }
 
-    pub fn manifest_reader(&self) -> Result<BoundedReader, PlayerError> {
-        self.reader_by_key(&self.manifest_key)
+    pub fn manifest_reader(&self) -> Result<Option<BoundedReader>, PlayerError> {
+        self.manifest_key
+            .as_deref()
+            .map(|key| self.reader_by_key(key))
+            .transpose()
     }
 
     pub fn reader(&self, basename: &str) -> Result<BoundedReader, PlayerError> {
@@ -91,6 +124,23 @@ impl SourceGroup {
 
     pub fn display_name(&self) -> &str {
         &self.display_name
+    }
+
+    pub(crate) fn manifest_path(&self) -> Option<&Path> {
+        self.manifest_key
+            .as_ref()
+            .map(|key| self.files[key].path.as_path())
+    }
+
+    pub(crate) fn path(&self, basename: &str) -> Option<&Path> {
+        normalized_key(basename)
+            .ok()
+            .and_then(|key| self.files.get(&key))
+            .map(|file| file.path.as_path())
+    }
+
+    pub(crate) fn filenames(&self) -> impl Iterator<Item = &str> {
+        self.files.values().map(|file| file.basename.as_str())
     }
 
     fn reader_by_key(&self, key: &str) -> Result<BoundedReader, PlayerError> {

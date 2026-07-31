@@ -192,3 +192,75 @@ Support copy/export to a local text or JSON file only after explicit user action
 ## Exit gate
 
 Phase 9 is complete when four-stem waveforms appear progressively, cached reopen is fast, cache contents meet privacy requirements, analysis cannot starve playback, rendering is viewport bounded, and diagnostics are useful without exposing private data or affecting real-time performance.
+
+## Implementation record
+
+### 2026-07-26 - Progressive analyzer, cache, renderer, and diagnostics core
+
+Status: exit gate passed.
+
+Implemented:
+
+- Added immutable four-role min/max peak pyramids at 256, 1,024, 4,096, and 16,384 source frames with exact final partial buckets and progressive snapshots.
+- Added independent analysis decoders that reuse the qualified Studio WAV and compressed-container source adapters without sharing playback decoder state.
+- Scheduled one bounded analysis block after each playback pump and pause analysis below the playback low watermark.
+- Added filename-independent SHA-256 source fingerprints from bounded head and tail evidence, sizes, modification times, and routed format descriptors. Studio fingerprints include the manifest and every routed file.
+- Added a versioned checksum-protected binary cache with checked parsing, a 64 MiB record limit, configurable total capacity, bounded directory scans, stale temporary cleanup, in-process same-key serialization, transactional sibling writes, and oldest-entry eviction.
+- Kept cache writes off the playback worker by committing completed immutable snapshots on a detached bounded write.
+- Added cache enable, disable, clear-current, clear-all, miss, write, and hit paths. Cache enablement and capacity persist, restore, and apply immediately at runtime.
+- Added four synchronized native waveform rows, separate playback cursor control, fit, zoom, scroll, nonvisual seek, and viewport projection capped at 4,096 columns. The production UI requests at most 800 columns per row.
+- Added optional master-minus-stem peak, RMS, dBFS, examined-frame, and non-finite diagnostics without changing playback.
+- Added bounded snapshot diagnostics for waveform progress, cache state, and playback-pressure throttling.
+- Added explicit native diagnostics copy and JSON export actions. Export omits the private source display name and reports success or failure in the diagnostics panel.
+
+Resource model:
+
+- Analysis PCM is one routed block: at most 4,096 frames by 10 Float32 channels, about 160 KiB, and is released after peak extraction.
+- Peak storage is 32 bytes per bucket across four roles. At 48 kHz, the four levels total about 28.7 MiB per hour of source duration.
+- Cache records are capped at 64 MiB and the default cache directory cap remains 512 MiB.
+- Fingerprinting reads at most the first and last 64 KiB of one file at a time.
+- Viewport projection is capped at 4,096 columns per row; the player UI uses 800.
+
+Verification:
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Formatting | `cargo fmt --all -- --check` after final rustfmt | PASS |
+| Focused waveform and controller tests | `cargo test -p stemplayer-waveform -p stemplayer` | PASS, 22 passed and 1 hardware-gated test ignored |
+| Workspace regression | `cargo test --workspace` | PASS, 139 passed and 4 environment-gated tests ignored |
+| Workspace lints | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| Production release build | `cargo build --release -p stemplayer` | PASS |
+| Cache lifecycle | Unit and real-controller tests cover miss, write, hit, corruption deletion, hostile timeline and resolution rejection, unknown version deletion, eviction, concurrent in-process same-key writes, privacy strings, clear-current, clear-all, runtime capacity reduction, and cached reopen | PASS |
+| Peak and consistency correctness | Tests cover exact buckets, final partial bucket, exact master sum, and known residual peak/RMS | PASS |
+| Viewport bounds | Long-duration projection and zoomed viewport tests cap every row by pixel width | PASS |
+| Analysis cancellation | A real controller source switch during progressive analysis publishes only the replacement generation and timeline | PASS |
+| Direct Windows UI Automation | Open, P shortcut, Playing state, four waveform accessible rows, fit, zoom, viewport, and playback-position controls enumerated | PASS |
+| Redacted diagnostics export | Focused app test serializes a private source name and verifies it is absent while sample-rate and waveform fields remain | PASS |
+| Cache write failures | Injected `StorageFull` and `PermissionDenied` writes verify no temporary or valid-looking entry remains | PASS |
+| Windows playback-under-analysis qualification | `scripts/qualify-phase9-windows.ps1` with a 30-second, 48 kHz, ten-channel Studio bundle and master | PASS, zero underruns and overflows during analysis and cached playback |
+| Long-source resource qualification | The same harness with a 120-second, 5,760,000-frame source | PASS, 40,095,744-byte peak private memory and zero underruns and overflows |
+| Cached reopen | Cache-hit process launch, audio startup, source open, and UI settle | PASS, 604.649 ms for 30 seconds and 568.228 ms for 120 seconds |
+| Analysis cost | Windows process counters, one-core-normalized CPU p95 and I/O deltas against cached playback | PASS, 6.25 percentage-point and 42,569,203-byte overhead for 30 seconds; 18.75 percentage-point and 151,045,616-byte overhead for 120 seconds |
+| Cache privacy and size | Binary inspection excludes fixture paths and routed filenames | PASS, 239,276 bytes for 30 seconds and 956,460 bytes for 120 seconds |
+| Windows UI captures | `artifacts/phase9/windows/{normal,compact,zoomed,cached-reopen}.png` at 216 DPI | PASS, visually inspected with the complete compact interface visible |
+| Legacy Phase 8 Windows harness | Replaced by `scripts/qualify-phase9-windows.ps1`, which uses cache completion and snapshots instead of SendKeys timing | SUPERSEDED |
+
+Exit-gate evidence:
+
+- Progressive four-stem waveforms and exact peak construction pass focused and controller tests.
+- Cached reopen, bounded cache contents, corruption handling, failure cleanup, eviction, and privacy pass.
+- Real Windows playback remains at zero underruns and overflows while analysis is active for both 30-second and 120-second sources.
+- Renderer projection remains viewport bounded and normal, compact, zoomed, and cached-reopen UI states were captured and visually inspected.
+- Diagnostics expose playback and waveform state and support explicit redacted copy and JSON export.
+- Phase 9 exit gate passed on 2026-07-26.
+
+### 2026-07-26 - Phase 9 started
+
+Status: in progress.
+
+Plan:
+
+- Implement the bounded four-level analyzer, source fingerprint, transactional cache, eviction, playback-pressure policy, viewport projection, consistency measurement, and redacted diagnostics in the existing waveform crate.
+- Reuse the engine's source adapters and controller cancellation boundary for progressive analysis.
+- Wire four synchronized waveform rows and cache controls into the Phase 8 UI without adding an idle repaint loop.
+- Qualify cache privacy and lifecycle, analysis cancellation and playback priority, viewport bounds, diagnostics, and workspace regressions before evaluating the exit gate.

@@ -25,6 +25,7 @@ pub struct DecodeScheduler {
     cancelled: Arc<AtomicBool>,
     metrics: DecodeMetrics,
     compressed_routes: Option<Vec<CompressedRoute>>,
+    audio_decoder: Option<CompressedTrackDecoder>,
 }
 
 struct CompressedRoute {
@@ -63,6 +64,7 @@ impl DecodeScheduler {
                 discarded_frames: 0,
             },
             compressed_routes: None,
+            audio_decoder: None,
         }
     }
 
@@ -157,6 +159,51 @@ impl DecodeScheduler {
                 }
                 interleave(session, start_frame, frames, &windows)
             }
+            SessionSource::Audio { path, info } => {
+                if self.audio_decoder.is_none() {
+                    self.audio_decoder =
+                        Some(CompressedTrackDecoder::open_audio(path, info.track_id)?);
+                    self.metrics.worker_count = 1;
+                }
+                let window = self.audio_decoder.as_mut().unwrap().decode_window(
+                    start_frame,
+                    frames,
+                    &self.cancelled,
+                )?;
+                self.metrics.bytes_read = self
+                    .metrics
+                    .bytes_read
+                    .saturating_add(window.diagnostics.encoded_bytes_read);
+                self.metrics.packets_decoded = self
+                    .metrics
+                    .packets_decoded
+                    .saturating_add(u64::from(window.diagnostics.packets_decoded));
+                self.metrics.discarded_frames = self
+                    .metrics
+                    .discarded_frames
+                    .saturating_add(window.diagnostics.discarded_frames);
+                let silence = || StereoWindow {
+                    left: vec![0.0; frames as usize],
+                    right: vec![0.0; frames as usize],
+                };
+                interleave(
+                    session,
+                    start_frame,
+                    frames,
+                    &[
+                        StereoWindow {
+                            left: window.left,
+                            right: window.right,
+                        },
+                        silence(),
+                        silence(),
+                        silence(),
+                    ],
+                )
+            }
+            SessionSource::External(source) => {
+                source.decode_block(session.generation(), start_frame, frames, &self.cancelled)
+            }
         }
     }
 
@@ -199,6 +246,29 @@ impl DecodeScheduler {
     fn record_buffered(&mut self, frames: u64) {
         self.metrics.minimum_buffered_frames = self.metrics.minimum_buffered_frames.min(frames);
         self.metrics.maximum_buffered_frames = self.metrics.maximum_buffered_frames.max(frames);
+    }
+}
+
+pub struct AnalysisDecoder {
+    session: PlaybackSession,
+    scheduler: DecodeScheduler,
+}
+
+impl AnalysisDecoder {
+    pub fn new(session: &PlaybackSession, cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            session: session.clone(),
+            scheduler: DecodeScheduler::with_cancellation(cancelled),
+        }
+    }
+
+    pub fn decode(&mut self, start_frame: u64, frames: u32) -> Result<SourceBlock, PlayerError> {
+        self.scheduler
+            .decode_block(&self.session, start_frame, frames)
+    }
+
+    pub fn cancel(&self) {
+        self.scheduler.cancel();
     }
 }
 

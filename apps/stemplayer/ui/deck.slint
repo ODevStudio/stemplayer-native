@@ -1,0 +1,363 @@
+import { Palette, Slider } from "std-widgets.slint";
+
+export component GainFader inherits Rectangle {
+    in-out property <float> gain-position;
+    in property <string> gain-text;
+    in property <string> role-name;
+    in property <bool> enabled;
+    callback gain-changed(float);
+    callback gain-commit();
+    private property <bool> reset-armed;
+    private property <float> last-released-value;
+    width: 144px;
+    height: 42px;
+    forward-focus: fader;
+
+    pure function position-to-fader(position: float) -> float {
+        if position <= 0 { return 0; }
+        if position >= 1000 { return 1000; }
+        if position <= 800 {
+            return 500 * Math.pow(10, -3 * Math.pow(1 - position / 800, 2));
+        }
+        return min(1000, 500 * Math.pow(10, (position - 800) / 200 * 0.3));
+    }
+
+    pure function fader-to-position(value: float) -> float {
+        if value <= 0 { return 0; }
+        let gain-db = 20 * Math.log(value / 500, 10);
+        if value <= 500 {
+            return max(0, 800 * (1 - Math.sqrt(-gain-db / 60)));
+        }
+        return min(1000, 800 + gain-db / 6 * 200);
+    }
+
+    function reset-gain() {
+        fader.value = 500;
+        root.gain-position = 800;
+        root.gain-changed(800);
+        root.gain-commit();
+        root.reset-armed = false;
+    }
+
+    changed gain-position => {
+        fader.value = root.position-to-fader(root.gain-position);
+    }
+
+    fader := Slider {
+        width: parent.width;
+        height: 28px;
+        minimum: 0;
+        maximum: 1000;
+        step: 10;
+        value: root.position-to-fader(root.gain-position);
+        enabled: root.enabled;
+        accessible-label: root.role-name + " gain";
+        changed(value) => {
+            root.gain-position = root.fader-to-position(value);
+            root.gain-changed(root.gain-position);
+        }
+        released(value) => {
+            if root.reset-armed && abs(value - root.last-released-value) < 1 {
+                root.reset-gain();
+            } else {
+                root.last-released-value = value;
+                root.reset-armed = true;
+                root.gain-commit();
+            }
+        }
+    }
+    Timer {
+        interval: 300ms;
+        running: root.reset-armed;
+        triggered => { root.reset-armed = false; }
+    }
+    Text {
+        y: 28px;
+        width: parent.width;
+        height: 12px;
+        text: round(fader.value / 5) + "%";
+        color: root.enabled ? Palette.foreground : Palette.foreground.with-alpha(0.45);
+        font-size: 8px;
+        horizontal-alignment: center;
+    }
+}
+
+component AudibleToggle inherits Rectangle {
+    in property <string> role-name;
+    in property <color> role-color;
+    in property <bool> audible;
+    private property <bool> displayed-audible: root.audible;
+    in property <bool> enabled;
+    callback toggled(bool);
+    width: 48px;
+    height: 30px;
+    background: Palette.alternate-background;
+    border-color: root.displayed-audible ? root.role-color : Palette.border;
+    border-width: root.displayed-audible ? 2px : 1px;
+    border-radius: 2px;
+    accessible-checkable: true;
+    accessible-enabled: root.enabled;
+    accessible-label: root.role-name + " enabled";
+    accessible-checked: root.displayed-audible;
+    accessible-role: checkbox;
+    changed audible => { root.displayed-audible = root.audible; }
+    function toggle() {
+        root.displayed-audible = !root.displayed-audible;
+        root.toggled(root.displayed-audible);
+    }
+    accessible-action-default => {
+        if (root.enabled) {
+            root.toggle();
+        }
+    }
+    forward-focus: toggle-focus;
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.role-name;
+        color: root.enabled ? root.role-color : root.role-color.with-alpha(0.45);
+        font-size: 10px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.toggle(); }
+    }
+    toggle-focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.toggle();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
+
+}
+
+export component WaveformRow inherits Rectangle {
+    in property <string> role-name;
+    in property <[float]> lower-peaks;
+    in property <[float]> upper-peaks;
+    in property <color> peak-color;
+    in property <[color]> peak-colors;
+    background: #101415;
+    border-color: #303638;
+    border-width: 1px;
+    accessible-role: image;
+    accessible-label: role-name + " waveform";
+
+    for tick in 8: Rectangle {
+        x: tick * root.width / 8;
+        width: 1px;
+        height: root.height;
+        background: #ffffff12;
+    }
+    Rectangle {
+        y: root.height / 2;
+        width: root.width;
+        height: 1px;
+        background: #ffffff24;
+    }
+    for lower[index] in root.lower-peaks: Rectangle {
+        x: index * root.width / root.lower-peaks.length;
+        width: max(1px, root.width / root.lower-peaks.length);
+        y: root.height * (0.5 - min(1, root.upper-peaks[index]) * 0.46);
+        height: max(
+            1px,
+            root.height * (min(1, root.upper-peaks[index]) - max(-1, lower)) * 0.46
+        );
+        background: root.peak-colors.length == root.lower-peaks.length
+            ? root.peak-colors[index]
+            : root.peak-color;
+    }
+}
+
+export component VerticalGainFader inherits Rectangle {
+    in-out property <float> gain-position;
+    in property <bool> enabled;
+    callback gain-changed(float);
+    callback gain-commit();
+    width: 64px;
+    background: #171b1c;
+    border-color: #303638;
+    border-width: 1px;
+    accessible-role: slider;
+    accessible-label: "Volume";
+    accessible-enabled: root.enabled;
+    accessible-value: round(root.position-to-fader(root.gain-position) / 5) + "%";
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 200;
+    accessible-value-step: 2;
+    accessible-action-set-value(value) => {
+        if root.enabled && value.is-float() {
+            root.set-fader(value.to-float() * 5);
+            root.gain-commit();
+        }
+    }
+    forward-focus: fader-focus;
+
+    pure function position-to-fader(position: float) -> float {
+        if position <= 0 { return 0; }
+        if position >= 1000 { return 1000; }
+        if position <= 800 {
+            return 500 * Math.pow(10, -3 * Math.pow(1 - position / 800, 2));
+        }
+        return min(1000, 500 * Math.pow(10, (position - 800) / 200 * 0.3));
+    }
+
+    pure function fader-to-position(value: float) -> float {
+        if value <= 0 { return 0; }
+        let gain-db = 20 * Math.log(value / 500, 10);
+        if value <= 500 {
+            return max(0, 800 * (1 - Math.sqrt(-gain-db / 60)));
+        }
+        return min(1000, 800 + gain-db / 6 * 200);
+    }
+
+    function set-fader(value: float) {
+        root.gain-position = root.fader-to-position(min(1000, max(0, value)));
+        root.gain-changed(root.gain-position);
+    }
+
+    function set-from-y(value: length) {
+        root.set-fader((1 - value / root.height) * 1000);
+    }
+
+    Rectangle {
+        x: 27px;
+        y: 12px;
+        width: 10px;
+        height: parent.height - 36px;
+        background: #0b0e0f;
+        border-color: #4a5255;
+        border-width: 1px;
+        Rectangle {
+            y: parent.height * (1 - root.position-to-fader(root.gain-position) / 1000);
+            width: parent.width;
+            height: parent.height - self.y;
+            background: #00a7bd;
+        }
+    }
+    Rectangle {
+        x: 20px;
+        y: 12px + (parent.height - 36px) * (1 - root.position-to-fader(root.gain-position) / 1000) - 3px;
+        width: 24px;
+        height: 7px;
+        background: #f5f7f7;
+        border-color: #111516;
+        border-width: 1px;
+    }
+    Text {
+        y: parent.height - 20px;
+        width: parent.width;
+        height: 14px;
+        text: round(root.position-to-fader(root.gain-position) / 5) + "%";
+        color: root.enabled ? Palette.foreground : Palette.foreground.with-alpha(0.45);
+        font-size: 9px;
+        horizontal-alignment: center;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.set-from-y(self.mouse-y); root.gain-commit(); }
+        moved => {
+            if self.pressed {
+                root.set-from-y(self.mouse-y);
+            }
+        }
+        double-clicked => {
+            root.set-fader(500);
+            root.gain-commit();
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                root.gain-commit();
+            }
+        }
+    }
+    fader-focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.UpArrow {
+                root.set-fader(root.position-to-fader(root.gain-position) + 10);
+                root.gain-commit();
+                accept
+            } else if event.text == Key.DownArrow {
+                root.set-fader(root.position-to-fader(root.gain-position) - 10);
+                root.gain-commit();
+                accept
+            } else if event.text == Key.Home {
+                root.set-fader(0);
+                root.gain-commit();
+                accept
+            } else if event.text == Key.End {
+                root.set-fader(1000);
+                root.gain-commit();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
+}
+
+export component StemDeckRow inherits Rectangle {
+    in property <string> role-name;
+    in property <[float]> lower-peaks;
+    in property <[float]> upper-peaks;
+    in property <color> peak-color;
+    in-out property <float> gain-position;
+    in property <string> gain-text;
+    in-out property <bool> muted;
+
+    in property <bool> enabled;
+    callback gain-changed(float);
+    callback gain-commit();
+    callback mute-changed(bool);
+
+    height: 42px;
+    background: #171b1c;
+    accessible-role: groupbox;
+    accessible-label: role-name + " stem";
+
+    AudibleToggle {
+        x: 4px;
+        y: 6px;
+        role-name: root.role-name;
+        role-color: root.peak-color;
+        audible: !root.muted;
+        enabled: root.enabled;
+        toggled(value) => {
+            root.muted = !value;
+            root.mute-changed(root.muted);
+        }
+    }
+    GainFader {
+        x: 58px;
+        gain-position <=> root.gain-position;
+        gain-text: root.gain-text;
+        role-name: root.role-name;
+        enabled: root.enabled;
+        gain-changed(value) => { root.gain-changed(value); }
+        gain-commit => { root.gain-commit(); }
+    }
+    WaveformRow {
+        x: 208px;
+        width: parent.width - 208px;
+        height: parent.height;
+        role-name: root.role-name;
+        lower-peaks: root.lower-peaks;
+        upper-peaks: root.upper-peaks;
+        peak-color: root.peak-color;
+    }
+}

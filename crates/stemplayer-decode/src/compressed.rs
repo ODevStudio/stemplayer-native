@@ -11,7 +11,11 @@ use stemplayer_format::{
 };
 use stemplayer_timeline::{Mp4EditEntry, Mp4TrackTimeline, common_mp4_range, map_mp4_timeline};
 use symphonia::core::codecs::audio::well_known::profiles::CODEC_PROFILE_AAC_LC;
-use symphonia::core::codecs::audio::well_known::{CODEC_ID_AAC, CODEC_ID_ALAC};
+use symphonia::core::codecs::audio::well_known::{
+    CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_PCM_F32LE,
+    CODEC_ID_PCM_F64LE, CODEC_ID_PCM_S8, CODEC_ID_PCM_S16LE, CODEC_ID_PCM_S24LE,
+    CODEC_ID_PCM_S32LE, CODEC_ID_PCM_U8, CODEC_ID_VORBIS,
+};
 use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
@@ -35,6 +39,10 @@ const AAC_SEEK_PREROLL_FRAMES: i64 = 2_048;
 pub enum CompressedCodec {
     AacLc,
     Alac,
+    Flac,
+    Mp3,
+    Pcm,
+    Vorbis,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -84,6 +92,44 @@ pub struct CompressedWindow {
     pub diagnostics: CompressedDecodeDiagnostics,
 }
 
+pub fn inspect_audio_file(path: &Path) -> Result<CompressedTrackInfo, PlayerError> {
+    let format = probe_format(path)?;
+    let tracks = format
+        .tracks()
+        .iter()
+        .filter(|track| track.track_type() == Some(TrackType::Audio))
+        .collect::<Vec<_>>();
+    if tracks.len() != 1 {
+        return Err(PlayerError::new(
+            ErrorCode::TrackCountUnsupported,
+            "Audio files must contain exactly one audio track",
+        ));
+    }
+    let track = tracks[0];
+    let parameters = track
+        .codec_params
+        .as_ref()
+        .and_then(|value| value.audio())
+        .ok_or_else(|| codec_error("Audio track has no codec configuration"))?;
+    let info = validate_parameters(track.id, track.num_frames, parameters, true)?;
+    let declared_frames = bounded_audio_frames(info.declared_frames)?;
+    Ok(CompressedTrackInfo {
+        declared_frames: Some(declared_frames),
+        ..info
+    })
+}
+
+fn bounded_audio_frames(frames: Option<u64>) -> Result<u64, PlayerError> {
+    frames
+        .filter(|frames| *frames > 0 && i64::try_from(*frames).is_ok())
+        .ok_or_else(|| {
+            PlayerError::new(
+                ErrorCode::TimelineInvalid,
+                "Audio file duration is unavailable or exceeds the supported timeline",
+            )
+        })
+}
+
 pub fn inspect_compressed_tracks(path: &Path) -> Result<Vec<CompressedTrackInfo>, PlayerError> {
     let format = probe_format(path)?;
     let tracks = format
@@ -96,7 +142,7 @@ pub fn inspect_compressed_tracks(path: &Path) -> Result<Vec<CompressedTrackInfo>
                 .as_ref()
                 .and_then(|value| value.audio())
                 .ok_or_else(|| codec_error("Compressed track has no audio codec configuration"))?;
-            validate_parameters(track.id, track.num_frames, parameters)
+            validate_parameters(track.id, track.num_frames, parameters, false)
         })
         .collect::<Result<Vec<_>, _>>()?;
     if tracks.is_empty() {
@@ -255,10 +301,39 @@ impl CompressedTrackDecoder {
             .and_then(|value| value.audio())
             .cloned()
             .ok_or_else(|| codec_error("Compressed track has no audio codec configuration"))?;
-        let info = validate_parameters(track_id, track.num_frames, &parameters)?;
+        let info = validate_parameters(track_id, track.num_frames, &parameters, false)?;
         let decoder = symphonia::default::get_codecs()
             .make_audio_decoder(&parameters, &AudioDecoderOptions::default())
             .map_err(|_| codec_error("Compressed track decoder cannot be created"))?;
+        Ok(Self {
+            format,
+            decoder,
+            info,
+            path: path.to_path_buf(),
+            identity,
+            next_frame: None,
+            pending: None,
+        })
+    }
+
+    pub fn open_audio(path: &Path, track_id: u32) -> Result<Self, PlayerError> {
+        let identity = compressed_file_identity(path)?;
+        let format = probe_format(path)?;
+        let track = format
+            .tracks()
+            .iter()
+            .find(|track| track.id == track_id && track.track_type() == Some(TrackType::Audio))
+            .ok_or_else(|| configuration_error("Requested audio track is unavailable"))?;
+        let parameters = track
+            .codec_params
+            .as_ref()
+            .and_then(|value| value.audio())
+            .cloned()
+            .ok_or_else(|| codec_error("Audio track has no codec configuration"))?;
+        let info = validate_parameters(track_id, track.num_frames, &parameters, true)?;
+        let decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(&parameters, &AudioDecoderOptions::default())
+            .map_err(|_| codec_error("Audio track decoder cannot be created"))?;
         Ok(Self {
             format,
             decoder,
@@ -330,7 +405,7 @@ impl CompressedTrackDecoder {
         if seeking {
             let seek_target = match self.info.codec {
                 CompressedCodec::AacLc => target.saturating_sub(AAC_SEEK_PREROLL_FRAMES).max(0),
-                CompressedCodec::Alac => target,
+                _ => target,
             };
             let seek = self
                 .format
@@ -364,7 +439,13 @@ impl CompressedTrackDecoder {
             if pending.packet_end <= current {
                 if seeking {
                     diagnostics.discarded_frames = diagnostics.discarded_frames.saturating_add(
-                        u64::try_from(pending.packet_end - pending.packet_start).unwrap(),
+                        u64::try_from(
+                            pending
+                                .packet_end
+                                .saturating_sub(pending.packet_start)
+                                .max(0),
+                        )
+                        .unwrap(),
                     );
                 }
                 self.pending = None;
@@ -393,14 +474,18 @@ impl CompressedTrackDecoder {
             {
                 return Err(PlayerError::new(
                     ErrorCode::AudioDataInvalid,
-                    "Decoded packet does not cover its presentation range",
+                    format!(
+                        "Decoded packet does not cover its presentation range: offset {source_offset}, copy {copy_frames}, frames {}",
+                        pending.frames
+                    ),
                 ));
             }
 
             for frame in source_offset..source_offset + copy_frames {
-                let index = usize::try_from(frame).unwrap() * 2;
+                let channels = usize::from(self.info.channels);
+                let index = usize::try_from(frame).unwrap() * channels;
                 left.push(pending.interleaved[index]);
-                right.push(pending.interleaved[index + 1]);
+                right.push(pending.interleaved[index + usize::from(channels == 2)]);
             }
             if seeking && current == target {
                 diagnostics.discarded_frames =
@@ -445,8 +530,8 @@ impl CompressedTrackDecoder {
                     "Compressed packet exceeds the supported size",
                 ));
             }
-            let packet_start = packet.pts.get();
-            let packet_end = packet_start
+            let encoded_packet_start = packet.pts.get();
+            let packet_end = encoded_packet_start
                 .checked_add_unsigned(packet.dur.get())
                 .ok_or_else(|| {
                     PlayerError::new(
@@ -463,16 +548,19 @@ impl CompressedTrackDecoder {
                 .saturating_add(packet.data.len() as u64);
             let frames = u64::try_from(decoded.frames()).unwrap();
             if frames > MAX_DECODED_PACKET_FRAMES
-                || frames < packet.block_dur().get()
-                || decoded.spec().channels().count() != 2
+                || matches!(
+                    self.info.codec,
+                    CompressedCodec::AacLc | CompressedCodec::Alac
+                ) && frames < packet.block_dur().get()
+                || decoded.spec().channels().count() != usize::from(self.info.channels)
                 || decoded.spec().rate() != self.info.sample_rate
             {
                 return Err(PlayerError::new(
                     ErrorCode::AudioDataInvalid,
-                    "Decoded packet does not match the qualified stereo track",
+                    "Decoded packet does not match the qualified audio track",
                 ));
             }
-            let mut interleaved = vec![0.0_f32; decoded.frames() * 2];
+            let mut interleaved = vec![0.0_f32; decoded.frames() * usize::from(self.info.channels)];
             decoded.copy_to_slice_interleaved(&mut interleaved);
             if interleaved.iter().any(|sample| !sample.is_finite()) {
                 return Err(PlayerError::new(
@@ -480,10 +568,29 @@ impl CompressedTrackDecoder {
                     "Decoded packet contains a non-finite sample",
                 ));
             }
+            let packet_trim = packet.trim_start.get();
+            let (packet_start, trim_start) = if matches!(
+                self.info.codec,
+                CompressedCodec::AacLc | CompressedCodec::Alac
+            ) {
+                (encoded_packet_start, packet_trim)
+            } else {
+                (
+                    encoded_packet_start
+                        .checked_add_unsigned(packet_trim)
+                        .ok_or_else(|| {
+                            PlayerError::new(
+                                ErrorCode::EncodedSampleInvalid,
+                                "Audio packet trim timestamp overflowed",
+                            )
+                        })?,
+                    0,
+                )
+            };
             return Ok(PendingDecoded {
                 packet_start,
                 packet_end,
-                trim_start: packet.trim_start.get(),
+                trim_start,
                 frames,
                 interleaved,
             });
@@ -495,6 +602,7 @@ fn validate_parameters(
     track_id: u32,
     declared_frames: Option<u64>,
     parameters: &AudioCodecParameters,
+    ordinary: bool,
 ) -> Result<CompressedTrackInfo, PlayerError> {
     let codec = if parameters.codec == CODEC_ID_AAC {
         if parameters.profile != Some(CODEC_PROFILE_AAC_LC) {
@@ -511,6 +619,25 @@ fn validate_parameters(
             ));
         }
         CompressedCodec::Alac
+    } else if ordinary && parameters.codec == CODEC_ID_FLAC {
+        CompressedCodec::Flac
+    } else if ordinary && parameters.codec == CODEC_ID_MP3 {
+        CompressedCodec::Mp3
+    } else if ordinary && parameters.codec == CODEC_ID_VORBIS {
+        CompressedCodec::Vorbis
+    } else if ordinary
+        && matches!(
+            parameters.codec,
+            CODEC_ID_PCM_S8
+                | CODEC_ID_PCM_U8
+                | CODEC_ID_PCM_S16LE
+                | CODEC_ID_PCM_S24LE
+                | CODEC_ID_PCM_S32LE
+                | CODEC_ID_PCM_F32LE
+                | CODEC_ID_PCM_F64LE
+        )
+    {
+        CompressedCodec::Pcm
     } else {
         return Err(PlayerError::new(
             ErrorCode::CodecUnsupported,
@@ -519,13 +646,25 @@ fn validate_parameters(
     };
     let sample_rate = parameters
         .sample_rate
-        .filter(|rate| matches!(rate, 44_100 | 48_000))
-        .ok_or_else(|| codec_error("Compressed track sample rate must be 44.1 or 48 kHz"))?;
+        .filter(|rate| {
+            if ordinary {
+                (8_000..=96_000).contains(rate)
+            } else {
+                matches!(rate, 44_100 | 48_000)
+            }
+        })
+        .ok_or_else(|| codec_error("Audio track sample rate is unsupported"))?;
     let channels = parameters
         .channels
         .as_ref()
-        .filter(|channels| channels.count() == 2)
-        .ok_or_else(|| codec_error("Compressed track must contain exactly two channels"))?;
+        .filter(|channels| {
+            if ordinary {
+                matches!(channels.count(), 1 | 2)
+            } else {
+                channels.count() == 2
+            }
+        })
+        .ok_or_else(|| codec_error("Audio track must contain one or two channels"))?;
     if parameters
         .extra_data
         .as_ref()
@@ -631,19 +770,21 @@ mod tests {
             Position::FRONT_LEFT | Position::FRONT_RIGHT,
         ));
         assert_eq!(
-            validate_parameters(7, Some(48_000), &aac).unwrap().codec,
+            validate_parameters(7, Some(48_000), &aac, false)
+                .unwrap()
+                .codec,
             CompressedCodec::AacLc
         );
 
         aac.profile = None;
         assert_eq!(
-            validate_parameters(7, None, &aac).unwrap_err().code,
+            validate_parameters(7, None, &aac, false).unwrap_err().code,
             ErrorCode::CodecUnsupported
         );
         aac.profile = Some(CODEC_PROFILE_AAC_LC);
         aac.sample_rate = Some(96_000);
         assert_eq!(
-            validate_parameters(7, None, &aac).unwrap_err().code,
+            validate_parameters(7, None, &aac, false).unwrap_err().code,
             ErrorCode::CodecConfigInvalid
         );
 
@@ -654,19 +795,35 @@ mod tests {
         alac.bits_per_sample = Some(24);
         alac.extra_data = Some(vec![0_u8; 24].into_boxed_slice());
         assert_eq!(
-            validate_parameters(8, None, &alac).unwrap().codec,
+            validate_parameters(8, None, &alac, false).unwrap().codec,
             CompressedCodec::Alac
         );
         alac.bits_per_sample = None;
         alac.extra_data.as_mut().unwrap()[5] = 20;
         assert_eq!(
-            validate_parameters(8, None, &alac).unwrap().bits_per_sample,
+            validate_parameters(8, None, &alac, false)
+                .unwrap()
+                .bits_per_sample,
             Some(20)
         );
         alac.bits_per_sample = Some(12);
         assert_eq!(
-            validate_parameters(8, None, &alac).unwrap_err().code,
+            validate_parameters(8, None, &alac, false).unwrap_err().code,
             ErrorCode::CodecConfigInvalid
+        );
+    }
+
+    #[test]
+    fn ordinary_audio_requires_a_known_bounded_duration() {
+        assert_eq!(
+            bounded_audio_frames(None).unwrap_err().code,
+            ErrorCode::TimelineInvalid
+        );
+        assert_eq!(
+            bounded_audio_frames(Some(i64::MAX as u64 + 1))
+                .unwrap_err()
+                .code,
+            ErrorCode::TimelineInvalid
         );
     }
 

@@ -14,8 +14,8 @@ use stemplayer_domain::{
 };
 
 pub use playback::PlaybackEngine;
-pub use scheduler::{DecodeMetrics, DecodeScheduler};
-pub use session::{BufferConfig, PlaybackSession};
+pub use scheduler::{AnalysisDecoder, DecodeMetrics, DecodeScheduler};
+pub use session::{BufferConfig, ExternalSource, PlaybackSession};
 pub use source_ring::{RingMetrics, SourceBlock, SynchronizedRing};
 
 #[derive(Debug)]

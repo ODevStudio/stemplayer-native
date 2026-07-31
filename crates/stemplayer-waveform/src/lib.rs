@@ -1,7 +1,15 @@
 #![deny(unsafe_code)]
 
-use stemplayer_domain::PlayerError;
+mod analyzer;
+mod cache;
+mod fingerprint;
+mod priority;
+mod viewport;
 
-pub trait WaveformService: Send + Sync {
-    fn clear_cache(&self) -> Result<(), PlayerError>;
-}
+pub use analyzer::{
+    CacheStatus, ConsistencySummary, Peak, PeakAnalyzer, PeakLevel, WaveformSnapshot,
+};
+pub use cache::{CacheConfig, CacheResult, WaveformCache};
+pub use fingerprint::{SourceEvidence, SourceFingerprint};
+pub use priority::{AnalysisDecision, AnalysisPriority};
+pub use viewport::{PeakColumn, ViewportGeometry, project_viewport};

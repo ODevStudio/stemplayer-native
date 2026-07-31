@@ -13,7 +13,10 @@ pub enum SourceLocator {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheCommand {
-    Clear,
+    ClearCurrent,
+    ClearAll,
+    ClearNetworkSource,
+    SetCapacityBytes(u64),
     Enable,
     Disable,
 }
