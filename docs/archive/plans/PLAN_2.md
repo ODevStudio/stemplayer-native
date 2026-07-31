@@ -1,10 +1,10 @@
-# Phase 2 — Native UI Shell, Controller Boundary, and Headless Harness
+# Phase 2 â€” Native UI Shell, Controller Boundary, and Headless Harness
 
 ## Progress
 
 - Status: exit gate passed (2026-07-22).
 - Source of truth and Phase 1 contracts reviewed before implementation.
-- Scope is limited to `stemplayer-native`; the webplayer and converter remain untouched.
+- Scope is limited to `native player`; the webplayer and converter remain untouched.
 
 ## Goal
 
@@ -20,7 +20,7 @@ The UI is newly implemented. It may reproduce user-facing concepts from the webp
 - Phase 0 UI toolkit gate passed.
 - Initial UX behavior matrix exists.
 
-## Work package 2.1 — Application lifecycle
+## Work package 2.1 â€” Application lifecycle
 
 Implement:
 
@@ -34,7 +34,7 @@ Implement:
 
 The application must close promptly even when a mock operation is intentionally stalled.
 
-## Work package 2.2 — Presentation model
+## Work package 2.2 â€” Presentation model
 
 Create a UI-facing model derived from `PlayerSnapshot`:
 
@@ -51,7 +51,7 @@ Create a UI-facing model derived from `PlayerSnapshot`:
 
 The presentation model performs formatting and interpolation but does not own playback truth. It must be deterministic and unit tested.
 
-## Work package 2.3 — Command adapter
+## Work package 2.3 â€” Command adapter
 
 Map UI actions into typed commands:
 
@@ -67,7 +67,7 @@ Map UI actions into typed commands:
 
 Use a bounded command path. Repeated slider movements should coalesce rather than create an unbounded queue. Seek dragging uses preview state and commits a bounded number of seeks.
 
-## Work package 2.4 — Mock engine
+## Work package 2.4 â€” Mock engine
 
 Implement a deterministic fake controller that simulates:
 
@@ -81,7 +81,7 @@ Implement a deterministic fake controller that simulates:
 
 The fake must use a virtual clock in tests so UI behavior is deterministic. It must not be included in production builds except behind an explicit development feature.
 
-## Work package 2.5 — Minimal native UI
+## Work package 2.5 â€” Minimal native UI
 
 Build a functional but visually restrained shell:
 
@@ -97,7 +97,7 @@ Build a functional but visually restrained shell:
 
 Do not spend this phase on visual polish. Focus on state correctness, focus order, keyboard operation, scaling, and low idle resource use.
 
-## Work package 2.6 — Event-driven playhead
+## Work package 2.6 â€” Event-driven playhead
 
 The controller publishes authoritative position snapshots at a bounded rate. While playing, the UI interpolates the visible cursor using a monotonic clock and the source sample rate. It corrects to new authoritative snapshots without visibly moving backward unless an explicit seek occurred.
 
@@ -109,7 +109,7 @@ Requirements:
 - Repaint stops immediately when paused, ended, hidden, or minimized.
 - Diagnostics update at a lower rate than the cursor.
 
-## Work package 2.7 — Accessibility and keyboard baseline
+## Work package 2.7 â€” Accessibility and keyboard baseline
 
 Provide:
 
@@ -122,7 +122,7 @@ Provide:
 - Dedicated shortcuts for transport, seeking, mute/solo navigation, reset, open, and diagnostics.
 - Windows UI Automation and screen-reader exposure smoke tests. Native macOS/Linux screen-reader task tests are optional Phase 12 platform-expansion evidence.
 
-## Work package 2.8 — Drag-and-drop and dialogs abstraction
+## Work package 2.8 â€” Drag-and-drop and dialogs abstraction
 
 Define platform traits for:
 
@@ -134,7 +134,7 @@ Define platform traits for:
 
 Use mock implementations in UI tests. Actual source validation belongs to later format phases.
 
-## Work package 2.9 — Headless harness completion
+## Work package 2.9 â€” Headless harness completion
 
 Expand `stemplayer-probe` with a machine-readable JSON output schema and commands that later phases will fill:
 
@@ -202,7 +202,7 @@ Phase 2 is complete when the Windows native application can exercise the complet
 
 Status: exit gate passed.
 
-Implementation remained limited to `stemplayer-native/`, plus the required phase-status records. The existing webplayer and converter were not modified or referenced at build or runtime.
+Implementation remained limited to ``, plus the required phase-status records. The existing webplayer and converter were not modified or referenced at build or runtime.
 
 ### Deliverables
 
@@ -252,10 +252,10 @@ Windows 11 Pro 10.0.26200, Ryzen 7 5800X3D, 32 GiB RAM, x64, Slint software rend
 
 Machine-readable evidence:
 
-- `stemplayer-native/artifacts/phase2/windows/resource-report.json`
-- `stemplayer-native/artifacts/phase2/windows/ui-qualification.json`
-- `stemplayer-native/artifacts/phase2/windows-nvda/nvda-qualification.json`
-- `stemplayer-native/artifacts/phase2/wsl-ubuntu/headless.json`
+- `artifacts/phase2/windows/resource-report.json`
+- `artifacts/phase2/windows/ui-qualification.json`
+- `artifacts/phase2/windows-nvda/nvda-qualification.json`
+- `artifacts/phase2/wsl-ubuntu/headless.json`
 
 ### Limitations
 

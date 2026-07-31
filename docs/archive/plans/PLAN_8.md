@@ -1,4 +1,4 @@
-# Phase 8 — Complete Native Player UI and Interaction Model
+# Phase 8 â€” Complete Native Player UI and Interaction Model
 
 ## Goal
 
@@ -7,10 +7,10 @@ Turn the technical local-playback foundation into a complete, efficient desktop 
 ## Entry criteria
 
 - Phase 2 native shell and presentation model are stable.
-- Phases 5–7 provide real local playback, mixer, and container capabilities.
+- Phases 5â€“7 provide real local playback, mixer, and container capabilities.
 - UI toolkit and renderer remain within Phase 0 budgets.
 
-## Work package 8.1 — Source opening workflows
+## Work package 8.1 â€” Source opening workflows
 
 Implement clear entry points:
 
@@ -24,7 +24,7 @@ The UI passes explicit selections to the controller. It does not traverse arbitr
 
 Recent entries store only what is necessary for a local convenience feature and can be disabled/cleared. Missing or moved sources fail gracefully.
 
-## Work package 8.2 — Transport UI
+## Work package 8.2 â€” Transport UI
 
 Provide:
 
@@ -40,7 +40,7 @@ Provide:
 
 During seek dragging, show preview position without issuing continuous decoder seeks. Commit on release and optionally at a low bounded interval for scrubbing if later qualified.
 
-## Work package 8.3 — Mixer UI
+## Work package 8.3 â€” Mixer UI
 
 For drums, bass, other, vocals:
 
@@ -60,7 +60,7 @@ Provide:
 
 The UI never computes effective mute/solo or output mode independently; it displays engine-derived state.
 
-## Work package 8.4 — Output-device settings
+## Work package 8.4 â€” Output-device settings
 
 Add:
 
@@ -73,7 +73,7 @@ Add:
 
 Device changes are controller commands and display a controlled transition. Avoid showing unstable internal identifiers.
 
-## Work package 8.5 — Application state and settings
+## Work package 8.5 â€” Application state and settings
 
 Version and persist only user preferences:
 
@@ -87,7 +87,7 @@ Version and persist only user preferences:
 
 Do not persist loaded PCM, source metadata not needed by the user, credentials, or HLS cookies.
 
-## Work package 8.6 — Error and recovery UX
+## Work package 8.6 â€” Error and recovery UX
 
 Errors must answer:
 
@@ -108,7 +108,7 @@ Support recovery actions such as:
 
 Never expose panic traces as the primary user message.
 
-## Work package 8.7 — Responsive layout and scaling
+## Work package 8.7 â€” Responsive layout and scaling
 
 Design for:
 
@@ -122,7 +122,7 @@ Design for:
 
 The player need not mimic the web layout exactly. It should preserve tasks and semantics while using native conventions.
 
-## Work package 8.8 — Accessibility completion
+## Work package 8.8 â€” Accessibility completion
 
 Qualify:
 
@@ -138,7 +138,7 @@ Qualify:
 
 Accessibility failures in core playback and mixer tasks are release blocking.
 
-## Work package 8.9 — Event and redraw policy
+## Work package 8.9 â€” Event and redraw policy
 
 Enforce:
 
@@ -152,7 +152,7 @@ Enforce:
 
 Instrument UI repaint count and time per frame in diagnostics builds.
 
-## Work package 8.10 — Native UI testing
+## Work package 8.10 â€” Native UI testing
 
 Create automation around stable accessibility identifiers or toolkit-native test hooks. Cover:
 
@@ -321,12 +321,12 @@ Resource evidence:
 
 Artifacts:
 
-- `stemplayer-native/artifacts/phase8/windows/ui-qualification.json`
-- `stemplayer-native/artifacts/phase8/windows/resource-report.json`
-- `stemplayer-native/artifacts/phase8/windows/compact.png`
-- `stemplayer-native/artifacts/phase8/windows/large-text-unicode.png`
-- `stemplayer-native/artifacts/phase8/windows-nvda-core/nvda-qualification.json`
-- `stemplayer-native/artifacts/phase8/windows-nvda-error/nvda-qualification.json`
+- `artifacts/phase8/windows/ui-qualification.json`
+- `artifacts/phase8/windows/resource-report.json`
+- `artifacts/phase8/windows/compact.png`
+- `artifacts/phase8/windows/large-text-unicode.png`
+- `artifacts/phase8/windows-nvda-core/nvda-qualification.json`
+- `artifacts/phase8/windows-nvda-error/nvda-qualification.json`
 
 Exit-gate conclusion:
 

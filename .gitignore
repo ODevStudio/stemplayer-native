@@ -1,2 +1,4 @@
 /target/
+/artifacts/*
+!/artifacts/README.md
 /artifacts/tmp/

@@ -1,4 +1,4 @@
-# Phase 0 — Boundary, Reference Audit, and Decision Gates
+# Phase 0 â€” Boundary, Reference Audit, and Decision Gates
 
 ## Progress
 
@@ -6,7 +6,7 @@
 - Started: 2026-07-21.
 - Completed: 2026-07-22.
 - Read-only webplayer revision: `08dfe03cc4ada7b8cac84d6191198e25e59aeb1e`.
-- Native workspace: `stemplayer-native/`, isolated from the existing Node workspace.
+- Native workspace: ``, isolated from the existing Node workspace.
 - Qualification hosts: Windows 11 x86-64 and Ubuntu 24.04 WSL2 x86-64.
 - Native macOS and Linux desktop qualification is an optional Phase 12 platform-expansion step and does not block Phase 1.
 
@@ -16,7 +16,7 @@ Convert the existing product knowledge into an explicit native-player specificat
 
 ## Boundary
 
-The webplayer is read-only during this phase. No source, configuration, test, package, or documentation change in the webplayer is required. The native player is planned as a separate repository named `stemplayer-native`; if organizational constraints require a monorepo temporarily, the Cargo workspace must remain independently buildable and must not modify or invoke the webplayer.
+The webplayer is read-only during this phase. No source, configuration, test, package, or documentation change in the webplayer is required. The native player is planned as a separate repository named `native player`; if organizational constraints require a monorepo temporarily, the Cargo workspace must remain independently buildable and must not modify or invoke the webplayer.
 
 The stem converter is not inspected as a runtime dependency. Only published output-format examples may be used as fixtures.
 
@@ -27,7 +27,7 @@ The stem converter is not inspected as a runtime dependency. Only published outp
 - Availability of a representative Windows machine and Ubuntu WSL2 for Linux compilation/headless tests.
 - Product and release/security ownership must be named before a public release decision in Phase 12.
 
-## Work package 0.1 — Reference inventory
+## Work package 0.1 â€” Reference inventory
 
 Create `docs/reference/webplayer-behavior-map.md` in the native project. For each relevant webplayer concern, record:
 
@@ -53,7 +53,7 @@ At minimum inspect:
 
 Do not copy browser-only mechanisms such as AudioWorklet, SharedArrayBuffer, IndexedDB, WebCodecs, browser workers, or DOM events into the native requirements. Capture their purpose instead.
 
-## Work package 0.2 — Native capability specification
+## Work package 0.2 â€” Native capability specification
 
 Create versioned native specifications:
 
@@ -76,7 +76,7 @@ Every specification distinguishes:
 - Compatibility assumptions.
 - Security constraints.
 
-## Work package 0.3 — Platform support decision
+## Work package 0.3 â€” Platform support decision
 
 Define the first supported matrix:
 
@@ -88,9 +88,9 @@ Define the first supported matrix:
 - Whether Intel macOS is release-blocking.
 - Whether ARM64 Windows is release-blocking or post-GA.
 
-Record the result in a decision document. Avoid a vague “all desktops” promise.
+Record the result in a decision document. Avoid a vague â€œall desktopsâ€ promise.
 
-## Work package 0.4 — Native UI gate
+## Work package 0.4 â€” Native UI gate
 
 Evaluate Slint as the default native UI toolkit with a minimal proof application containing:
 
@@ -120,7 +120,7 @@ Decision gate:
 
 A WebView-based fallback is not allowed because it would violate the product definition.
 
-## Work package 0.5 — Audio and codec dependency gate
+## Work package 0.5 â€” Audio and codec dependency gate
 
 Prototype and assess:
 
@@ -142,9 +142,9 @@ For each candidate record:
 - Whether the dependency can allocate or block in the real-time path.
 - Whether a small adapter can isolate replacement later.
 
-Do not commit to a decoder based only on “file opens.” The gate requires exact frame-count, seek, edit-list, and bounded-memory feasibility.
+Do not commit to a decoder based only on â€œfile opens.â€ The gate requires exact frame-count, seek, edit-list, and bounded-memory feasibility.
 
-## Work package 0.6 — Measurement methodology
+## Work package 0.6 â€” Measurement methodology
 
 Create reproducible scripts and report templates for:
 
@@ -162,7 +162,7 @@ Create reproducible scripts and report templates for:
 
 Document tool differences by platform. Raw measurements must be saved as machine-readable artifacts with hardware, OS, build profile, source fixture, sample rate, output device, and timestamp.
 
-## Work package 0.7 — Fixture and provenance policy
+## Work package 0.7 â€” Fixture and provenance policy
 
 Define three fixture classes:
 
@@ -174,7 +174,7 @@ Public fixtures must cover malformed manifests, role ambiguity, Unicode collisio
 
 No fixture may contain unlicensed commercial audio.
 
-## Work package 0.8 — Initial error taxonomy
+## Work package 0.8 â€” Initial error taxonomy
 
 Create stable categories:
 
@@ -233,21 +233,21 @@ Phase 0 is complete when Windows UI/audio and codec feasibility evidence passes,
 
 ### Deliverables created
 
-The isolated workspace is `stemplayer-native/`. It is mechanically independent and may carry Phase 1; moving it to a separate production repository remains a release-boundary task.
+The isolated workspace is ``. It is mechanically independent and may carry Phase 1; moving it to a separate production repository remains a release-boundary task.
 
-- Reference map: `stemplayer-native/docs/reference/webplayer-behavior-map.md`.
-- Native source profiles: `stemplayer-native/docs/formats/`.
-- Transport, mixer, timeline, and cache contracts: `stemplayer-native/docs/architecture/`.
-- Repository, platform, UI, dependency, security, and budget decisions: `stemplayer-native/docs/decisions/phase0-decisions.md`.
-- Fixture/provenance policy: `stemplayer-native/docs/fixtures/policy.md`.
-- Error taxonomy: `stemplayer-native/docs/errors/taxonomy.md`.
-- Risk register: `stemplayer-native/docs/risks.md`.
-- Measurement method/schema/script: `stemplayer-native/docs/measurement/` and `stemplayer-native/scripts/measure-windows.ps1`.
-- Native proof: `stemplayer-native/phase0-probe/`.
+- Reference map: `docs/reference/webplayer-behavior-map.md`.
+- Native source profiles: `docs/formats/`.
+- Transport, mixer, timeline, and cache contracts: `docs/architecture/`.
+- Repository, platform, UI, dependency, security, and budget decisions: `docs/decisions/phase0-decisions.md`.
+- Fixture/provenance policy: `docs/fixtures/policy.md`.
+- Error taxonomy: `docs/errors/taxonomy.md`.
+- Risk register: `docs/risks.md`.
+- Measurement method/schema/script: `docs/measurement/` and `scripts/measure-windows.ps1`.
+- Native proof: `phase0-probe/`.
 
 ### Decisions
 
-- Production location: separate `stemplayer-native` repository; the in-tree workspace is temporary and mechanically independent.
+- Production location: separate `native player` repository; the in-tree workspace is temporary and mechanically independent.
 - Release matrix: Windows 11 24H2 x86-64 is the qualified required platform. macOS 14+ Apple silicon and native Ubuntu 24.04/Fedora 44 x86-64 are optional Phase 12 expansions and remain unsupported until qualified.
 - UI: Slint 1.17.1 with winit/software rendering is adopted for Windows and X11 compilation. FemtoVG is rejected because it misses the idle private-memory budget. Wayland is disabled until its vulnerable build-time dependency path is patched upstream.
 - Dependencies: CPAL, Rubato, rtrb, sha2, and Symphonia are accepted for Phase 1 boundaries. Symphonia passed Phase 0 AAC-LC/ALAC feasibility; full adversarial codec qualification remains Phase 7 work. ureq/rustls remains provisional for Phase 10.
@@ -272,7 +272,7 @@ Host: Windows 11 x86-64, Rust 1.97.1, local default WASAPI output.
 | Default output stream | PASS, 44.1 kHz stereo Float32, 23 callbacks, 0 errors |
 | Software-only UI, 20 seconds | PASS execution; 11,218,944 private bytes, 27,738,112 resident bytes, normalized CPU average 0.0189% |
 | FemtoVG UI, 20 seconds | FAIL budget; 106,668,032 to 108,503,040 private bytes |
-| Standalone copy test | PASS: copied without `target`/artifacts to `C:\tmp\stemplayer-native-phase0-boundary`, then `cargo test --locked --offline` |
+| Standalone copy test | PASS: copied without `target`/artifacts to `C:\tmp\native player-phase0-boundary`, then `cargo test --locked --offline` |
 | Build-step dependency scan | PASS: no Node.js, pnpm, Python, FFmpeg, webplayer path, or converter dependency in native build/run configuration |
 | Windows UI Automation | PASS: 15 keyboard-focusable elements, all required accessible names exposed |
 | NVDA 2026.1.1 | PASS: announced all four gain sliders plus Play and Stop through actual NVDA speech events |
@@ -283,15 +283,15 @@ Host: Windows 11 x86-64, Rust 1.97.1, local default WASAPI output.
 | ALAC exact feasibility | PASS at 441,000 and 2,646,000 presentation frames; repeat and mid-stream exact seek passed |
 | Codec duration-memory comparison | PASS: AAC +2,174,976 bytes; ALAC +12,288 bytes from 10 to 60 seconds |
 
-Raw reports are `stemplayer-native/artifacts/phase0/windows-software-selected/`, `stemplayer-native/artifacts/phase0/windows-femtovg/ui-idle.json`, `stemplayer-native/artifacts/phase0/windows-ui/ui-qualification.json`, `stemplayer-native/artifacts/phase0/windows-nvda/nvda-qualification.json`, and `stemplayer-native/artifacts/phase0/windows-codecs/codec-qualification.json`.
+Raw reports are `artifacts/phase0/windows-software-selected/`, `artifacts/phase0/windows-femtovg/ui-idle.json`, `artifacts/phase0/windows-ui/ui-qualification.json`, `artifacts/phase0/windows-nvda/nvda-qualification.json`, and `artifacts/phase0/windows-codecs/codec-qualification.json`.
 
 ### WSL evidence
 
-Ubuntu 24.04.4 LTS under WSL2 x86-64 used Rust 1.97.1 and an isolated `/tmp` Cargo target directory. `cargo test --locked` compiled the Linux target and passed the headless primitive test; `cargo metadata --locked --no-deps --format-version 1` also passed. This is compilation/headless evidence only, not native Linux desktop, renderer, audio, or accessibility qualification. Raw evidence is `stemplayer-native/artifacts/phase0/wsl-ubuntu/headless.json`.
+Ubuntu 24.04.4 LTS under WSL2 x86-64 used Rust 1.97.1 and an isolated `/tmp` Cargo target directory. `cargo test --locked` compiled the Linux target and passed the headless primitive test; `cargo metadata --locked --no-deps --format-version 1` also passed. This is compilation/headless evidence only, not native Linux desktop, renderer, audio, or accessibility qualification. Raw evidence is `artifacts/phase0/wsl-ubuntu/headless.json`.
 
 ### Dependency evidence
 
-The final locked graph contains 602 packages across all target-specific branches after selecting Slint's X11-only Linux backend. `cargo audit` found zero vulnerabilities with no ignored advisories. The earlier Wayland graph exposed two `quick-xml 0.39.4` denial-of-service advisories through `wayland-scanner`; removing Wayland removed that vulnerable build path. The license inventory found zero unlicensed crates and records every detected license. Four Slint-transitive crates are reported unmaintained and remain tracked for Phase 12 dependency refresh. Raw evidence is `stemplayer-native/artifacts/phase0/dependencies/audit.json`.
+The final locked graph contains 602 packages across all target-specific branches after selecting Slint's X11-only Linux backend. `cargo audit` found zero vulnerabilities with no ignored advisories. The earlier Wayland graph exposed two `quick-xml 0.39.4` denial-of-service advisories through `wayland-scanner`; removing Wayland removed that vulnerable build path. The license inventory found zero unlicensed crates and records every detected license. Four Slint-transitive crates are reported unmaintained and remain tracked for Phase 12 dependency refresh. Raw evidence is `artifacts/phase0/dependencies/audit.json`.
 
 ### Deferred optional Phase 12 evidence
 

@@ -4,7 +4,7 @@ Date: 2026-07-22. Status: Phase 0 decisions accepted; optional platform expansio
 
 ## Repository Boundary
 
-Decision: the production project is a separate repository named `stemplayer-native`. This temporary `stemplayer-native/` directory is an independently buildable Cargo workspace used only to preserve Phase 0 evidence until that repository exists.
+Decision: the production project is a separate repository named `stemplayer-native`. This extracted repository is an independently buildable Cargo workspace and no longer depends on the web repository checkout.
 
 Mechanical rules:
 
@@ -65,7 +65,7 @@ No internal ring, hash, HTTP, or decoder abstraction is built in Phase 0 beyond 
 
 ## Budgets
 
-Decision: accept the initial budgets in `docs/rustplayer/PLAN.md` unchanged. They are acceptance limits, not current claims. In particular, the 50 MiB idle process-set budget includes all application processes and renderer allocations visible to the OS. A missed budget changes implementation or dependency choice; it does not lower the gate without product and release/security owner approval.
+Decision: accept the initial budgets in `docs/archive/plans/PLAN.md` unchanged. They are acceptance limits, not current claims. In particular, the 50 MiB idle process-set budget includes all application processes and renderer allocations visible to the OS. A missed budget changes implementation or dependency choice; it does not lower the gate without product and release/security owner approval.
 
 ## Release And Security Defaults
 

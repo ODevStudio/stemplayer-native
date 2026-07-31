@@ -1,4 +1,4 @@
-# Phase 6 — Stem Mixer, Master Reference, and Output Resampling
+# Phase 6 â€” Stem Mixer, Master Reference, and Output Resampling
 
 ## Goal
 
@@ -11,19 +11,19 @@ Implement the complete native mixing behavior and make playback robust across so
 - Phase 1 pure mixer state contract is complete.
 - Mixer behavior specification is approved.
 
-## Work package 6.1 — Render graph
+## Work package 6.1 â€” Render graph
 
 Implement a fixed render graph:
 
 ```text
-8 stem channels ──> four stereo stem gains ──> stem sum ─┐
-                                                        ├─> complementary A/B ─> stereo output
-optional master stereo ─────────────────────────────────┘
+8 stem channels â”€â”€> four stereo stem gains â”€â”€> stem sum â”€â”
+                                                        â”œâ”€> complementary A/B â”€> stereo output
+optional master stereo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 The graph is data-oriented and preallocated. It must handle source blocks without master without branching into a separate timing model.
 
-## Work package 6.2 — Gain and mute/solo application
+## Work package 6.2 â€” Gain and mute/solo application
 
 For each role:
 
@@ -38,7 +38,7 @@ For each role:
 
 Commands update control state outside the callback. The render thread consumes compact automation events from a bounded queue or atomic mailbox.
 
-## Work package 6.3 — Master/stem A/B
+## Work package 6.3 â€” Master/stem A/B
 
 Implement:
 
@@ -53,7 +53,7 @@ Implement:
 
 A/B changes must not seek, reset decoders, reset source rings, or move the source cursor.
 
-## Work package 6.4 — Summation and numeric behavior
+## Work package 6.4 â€” Summation and numeric behavior
 
 - Accumulate stems in Float32 or Float64 according to measured quality/performance; record the decision.
 - Preserve deterministic channel order.
@@ -64,7 +64,7 @@ A/B changes must not seek, reset decoders, reset source rings, or move the sourc
 
 A diagnostic residual between master and stem sum may be measured for Studio bundles, but no correction is applied.
 
-## Work package 6.5 — Post-mix resampling
+## Work package 6.5 â€” Post-mix resampling
 
 Add one stereo resampler between the A/B output and device ring:
 
@@ -80,7 +80,7 @@ Add one stereo resampler between the A/B output and device ring:
 
 Do not create one resampler per stem or per track.
 
-## Work package 6.6 — Device-rate changes
+## Work package 6.6 â€” Device-rate changes
 
 When the active output device changes:
 
@@ -93,7 +93,7 @@ When the active output device changes:
 
 Do not rewrite the loaded source or alter stem alignment.
 
-## Work package 6.7 — Automation timing
+## Work package 6.7 â€” Automation timing
 
 Define automation time in source frames, not UI clock milliseconds. Convert 10 ms and 20 ms durations to frame counts with deterministic rounding. For resampled output, ensure the audible automation duration remains within tolerance.
 
@@ -106,7 +106,7 @@ Tests cover commands issued:
 - Immediately before end.
 - In rapid alternating sequences.
 
-## Work package 6.8 — Mixer diagnostics
+## Work package 6.8 â€” Mixer diagnostics
 
 Expose bounded values:
 
@@ -121,7 +121,7 @@ Expose bounded values:
 
 Diagnostic reads must not lock or disturb the render path.
 
-## Work package 6.9 — UI enablement
+## Work package 6.9 â€” UI enablement
 
 Enable full native controls:
 
@@ -192,7 +192,7 @@ Implemented:
 - Added one preallocated stereo `rubato` FFT resampler after the A/B bus. The source rate remains authoritative while the output device negotiates independently.
 - Added exact resampled end-frame accounting, delay and fractional-phase diagnostics, bounded buffers, non-finite sample rejection, peak diagnostics, and device-change discontinuity tracking.
 - Enabled native gain, mute, multi-solo, reset, and automatic/master/stem preference controls. Slider floods are coalesced before the bounded controller queue.
-- Recorded the resampler, dependency, and Float32 summation decision in `stemplayer-native/docs/decisions/phase6-post-mix-resampler.md`.
+- Recorded the resampler, dependency, and Float32 summation decision in `docs/decisions/phase6-post-mix-resampler.md`.
 
 Verification:
 

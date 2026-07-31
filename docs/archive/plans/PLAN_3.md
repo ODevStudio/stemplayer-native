@@ -1,10 +1,10 @@
-# Phase 3 — Native Audio Device and Real-Time Output Core
+# Phase 3 â€” Native Audio Device and Real-Time Output Core
 
 ## Progress
 
 - Status: exit gate passed (2026-07-22).
 - Phase 0 audio decisions, Phase 1 contracts, and the Phase 2 probe handoff were reviewed before implementation.
-- Scope remains limited to `stemplayer-native`; formats, mixer behavior, the webplayer, and the converter remain untouched.
+- Scope remains limited to `native player`; formats, mixer behavior, the webplayer, and the converter remain untouched.
 
 ## Goal
 
@@ -19,7 +19,7 @@ Implement and qualify the platform audio-output layer independently of file form
 
 Phase 3 can proceed in parallel with Phases 2 and 4 after Phase 1.
 
-## Work package 3.1 — Output-device discovery
+## Work package 3.1 â€” Output-device discovery
 
 Implement:
 
@@ -32,20 +32,20 @@ Implement:
 
 Device names are user-visible but must not be included in crash reports or telemetry because no telemetry exists.
 
-## Work package 3.2 — Configuration policy
+## Work package 3.2 â€” Configuration policy
 
 Define deterministic negotiation:
 
 1. Prefer the selected device; otherwise use the current default.
 2. Prefer a device sample rate matching the source when available.
-3. Otherwise prefer the platform’s normal/default rate.
+3. Otherwise prefer the platformâ€™s normal/default rate.
 4. Prefer Float32 output, then common integer formats.
 5. Use a conservative default buffer size initially.
 6. Expose an advanced latency setting only after qualification data exists.
 
 The policy must not silently switch devices during ordinary playback unless the active device disappears or the user changes it.
 
-## Work package 3.3 — SPSC output ring
+## Work package 3.3 â€” SPSC output ring
 
 Create a fixed-capacity stereo ring between the render thread and device callback:
 
@@ -60,7 +60,7 @@ Create a fixed-capacity stereo ring between the render thread and device callbac
 
 The ring stores the final device-rate stereo representation or a canonical Float32 stereo representation followed by callback-local format conversion.
 
-## Work package 3.4 — Device callback
+## Work package 3.4 â€” Device callback
 
 The callback may perform only:
 
@@ -82,7 +82,7 @@ Prohibited:
 
 Add a test-only allocator hook or equivalent instrumentation to prove zero callback allocations after stream start.
 
-## Work package 3.5 — Render worker
+## Work package 3.5 â€” Render worker
 
 Implement a render worker that fills the output ring from a synthetic source:
 
@@ -95,7 +95,7 @@ Implement a render worker that fills the output ring from a synthetic source:
 
 The worker is the future location for post-mix resampling, not the callback.
 
-## Work package 3.6 — Audio clock
+## Work package 3.6 â€” Audio clock
 
 Define authoritative output timing:
 
@@ -107,7 +107,7 @@ Define authoritative output timing:
 
 Record uncertainty when a backend cannot expose reliable device latency rather than inventing precision.
 
-## Work package 3.7 — Device loss and lifecycle
+## Work package 3.7 â€” Device loss and lifecycle
 
 Implement:
 
@@ -122,7 +122,7 @@ Implement:
 
 Do not automatically resume audible playback after a disruptive device switch unless product policy explicitly approves it.
 
-## Work package 3.8 — Platform backend policy
+## Work package 3.8 â€” Platform backend policy
 
 ### Windows
 
@@ -138,10 +138,10 @@ Do not automatically resume audible playback after a disruptive device switch un
 ### Linux
 
 - Keep PipeWire/PulseAudio/ALSA support behind the common backend contract.
-- Detect and explain “device busy” conditions.
+- Detect and explain â€œdevice busyâ€ conditions.
 - Native hot-plug and server-restart qualification is optional Phase 12 platform-expansion work.
 
-## Work package 3.9 — Probe commands
+## Work package 3.9 â€” Probe commands
 
 Implement:
 

@@ -3,11 +3,11 @@
 
 use slint::ComponentHandle;
 
-#[cfg(feature = "local-wav")]
+#[cfg(all(feature = "local-wav", not(feature = "development")))]
 mod playlist;
-#[cfg(feature = "local-wav")]
+#[cfg(all(feature = "local-wav", not(feature = "development")))]
 mod studio_controller;
-#[cfg(feature = "local-wav")]
+#[cfg(all(feature = "local-wav", not(feature = "development")))]
 mod studio_ui;
 
 slint::include_modules!();

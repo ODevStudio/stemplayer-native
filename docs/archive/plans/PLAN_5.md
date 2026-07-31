@@ -1,4 +1,4 @@
-# Phase 5 — Sample-Synchronous Playback Engine and Transport
+# Phase 5 â€” Sample-Synchronous Playback Engine and Transport
 
 ## Goal
 
@@ -11,7 +11,7 @@ Integrate the Studio WAV source path with the native output core to produce the 
 - Phase 4 Studio WAV validation and bounded decode qualified.
 - Phase 1 transport and command contracts stable.
 
-## Work package 5.1 — Session construction
+## Work package 5.1 â€” Session construction
 
 A successful Studio inspection produces a native playback session containing:
 
@@ -28,7 +28,7 @@ A successful Studio inspection produces a native playback session containing:
 
 Session construction is transactional: failure leaves no partially active stream, worker, file handle, or cache entry.
 
-## Work package 5.2 — Synchronized source ring
+## Work package 5.2 â€” Synchronized source ring
 
 Implement one common frame domain with either:
 
@@ -47,7 +47,7 @@ Required properties:
 
 Start with conservative watermarks based on existing evidence, then tune using native measurements. Any change to 1.5-second start, 3-second low, 6-second target, or 12-second maximum policy must be evidence-based and documented.
 
-## Work package 5.3 — Decode scheduler
+## Work package 5.3 â€” Decode scheduler
 
 Create a bounded scheduler that:
 
@@ -62,7 +62,7 @@ Create a bounded scheduler that:
 
 No task queue may grow in proportion to track duration.
 
-## Work package 5.4 — Generation and cancellation model
+## Work package 5.4 â€” Generation and cancellation model
 
 Every load, stop reset, and seek that invalidates pending PCM creates a new generation. All source blocks, decode requests, render operations, and ring state are tagged or guarded by that generation.
 
@@ -74,7 +74,7 @@ Prove:
 - Shutdown cancels all generations.
 - Generation wraparound is either impossible in practice with a wide counter or explicitly handled.
 
-## Work package 5.5 — Transport operations
+## Work package 5.5 â€” Transport operations
 
 ### Load
 
@@ -118,7 +118,7 @@ Prove:
 - Enter `ENDED` once.
 - Never wrap or replay stale frames.
 
-## Work package 5.6 — Source-to-output render bridge
+## Work package 5.6 â€” Source-to-output render bridge
 
 For this phase, use a neutral fixed route sufficient to prove transport:
 
@@ -127,7 +127,7 @@ For this phase, use a neutral fixed route sufficient to prove transport:
 
 Full user mixer automation arrives in Phase 6. The bridge must already preserve all channels in the source ring so Phase 6 does not require an engine redesign.
 
-## Work package 5.7 — Position snapshots
+## Work package 5.7 â€” Position snapshots
 
 Publish bounded snapshots containing:
 
@@ -142,7 +142,7 @@ Publish bounded snapshots containing:
 
 Snapshot publication is coalesced. The UI interpolates between snapshots and does not receive per-callback messages.
 
-## Work package 5.8 — Underrun policy
+## Work package 5.8 â€” Underrun policy
 
 On source or output underrun:
 
@@ -155,7 +155,7 @@ On source or output underrun:
 
 Normal local SSD playback must produce zero underruns in qualification.
 
-## Work package 5.9 — Integration with native shell
+## Work package 5.9 â€” Integration with native shell
 
 Replace the mock controller behind an internal feature with the real Studio controller:
 
@@ -234,7 +234,7 @@ Performance decisions:
 - The controller services a roughly 186 ms output queue every 25 ms.
 - Authoritative snapshots publish once per second during steady playback; the UI interpolates the visible playhead at 500 ms.
 - Output-ring writes and callback counters are batched. This removed per-frame metric atomics and reduced measured playback CPU below the WAV budget.
-- rfd 0.15.4 is Windows-only with default features disabled. The security, license, and dependency decision is recorded in stemplayer-native/docs/decisions/phase5-native-folder-picker.md.
+- rfd 0.15.4 is Windows-only with default features disabled. The security, license, and dependency decision is recorded in docs/decisions/phase5-native-folder-picker.md.
 
 Evidence:
 
@@ -245,11 +245,11 @@ Evidence:
 - A complete 30-second four-stem synthetic Studio bundle played through Lautsprecher (4- iFi (by AMR) HD+ USB Audio) to exact frame 1,323,000 and entered ENDED with zero underruns and zero overflows.
 - Windows release measurement: 4.655% of one logical core p95, 2.764% average, 23,445,504 peak private bytes, and 41,689,088 peak working set bytes.
 - The optimized binary is 12,060,672 bytes with SHA-256 ECB665C538369C0436C2242AE7C0BC39D50E7F94A7333EE0CC897ED6C0CB75B9.
-- Ubuntu 24.04 under WSL passed locked headless workspace tests. Raw report: stemplayer-native/artifacts/phase5/wsl-ubuntu/headless.json.
-- Windows raw measurement: stemplayer-native/artifacts/phase5/windows/resource-report.json.
-- Windows summary: stemplayer-native/artifacts/phase5/windows/qualification.json.
+- Ubuntu 24.04 under WSL passed locked headless workspace tests. Raw report: artifacts/phase5/wsl-ubuntu/headless.json.
+- Windows raw measurement: artifacts/phase5/windows/resource-report.json.
+- Windows summary: artifacts/phase5/windows/qualification.json.
 - The user confirmed audible output through headphones.
-- A verified 8:32 real Studio bundle with four stems and master played all 22,583,610 frames, entered ENDED, selected master-reference routing, and reported zero underruns and zero overflows. Final snapshot: stemplayer-native/artifacts/phase5/windows/real-bundle-snapshot.json.
+- A verified 8:32 real Studio bundle with four stems and master played all 22,583,610 frames, entered ENDED, selected master-reference routing, and reported zero underruns and zero overflows. Final snapshot: artifacts/phase5/windows/real-bundle-snapshot.json.
 
 Covered tests:
 

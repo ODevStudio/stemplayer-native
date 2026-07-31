@@ -1,12 +1,12 @@
-# Phase 1 — Independent Rust Workspace and Domain Contracts
+# Phase 1 â€” Independent Rust Workspace and Domain Contracts
 
 ## Goal
 
-Create the native project’s compileable, testable foundation: a strictly layered Cargo workspace, stable domain types, command/snapshot APIs, error contracts, feature boundaries, and continuous-integration checks. No production audio or file decoding is required yet.
+Create the native projectâ€™s compileable, testable foundation: a strictly layered Cargo workspace, stable domain types, command/snapshot APIs, error contracts, feature boundaries, and continuous-integration checks. No production audio or file decoding is required yet.
 
 ## Boundary
 
-This phase creates only native-project files. It does not relocate, refactor, or share source with the webplayer. The webplayer’s concepts may inform domain values, but all native contracts are independently documented and tested.
+This phase creates only native-project files. It does not relocate, refactor, or share source with the webplayer. The webplayerâ€™s concepts may inform domain values, but all native contracts are independently documented and tested.
 
 ## Entry criteria
 
@@ -15,7 +15,7 @@ This phase creates only native-project files. It does not relocate, refactor, or
 - Supported platform baseline recorded.
 - Native format and behavior specifications exist.
 
-## Work package 1.1 — Workspace creation
+## Work package 1.1 â€” Workspace creation
 
 Create the workspace described in `PLAN.md` with these dependency rules:
 
@@ -31,7 +31,7 @@ Create the workspace described in `PLAN.md` with these dependency rules:
 
 Use workspace-level dependency versions and lints. Pin the Rust toolchain and commit `Cargo.lock` for application reproducibility.
 
-## Work package 1.2 — Domain model
+## Work package 1.2 â€” Domain model
 
 Define strongly typed values instead of passing paths, strings, or scalar options through loosely typed maps:
 
@@ -48,7 +48,7 @@ Define strongly typed values instead of passing paths, strings, or scalar option
 
 Use newtypes for values that must not be mixed accidentally. Conversion functions must be checked and deterministic. Rational time calculations must not use accumulating floating-point clocks.
 
-## Work package 1.3 — Mixer state contract
+## Work package 1.3 â€” Mixer state contract
 
 Implement only pure mixer-state derivation in this phase:
 
@@ -63,7 +63,7 @@ Implement only pure mixer-state derivation in this phase:
 
 Do not implement audio ramps yet. Property tests must cover all combinations of mute and solo across four roles, gain boundaries, master present/absent, and output preferences.
 
-## Work package 1.4 — Transport state contract
+## Work package 1.4 â€” Transport state contract
 
 Implement the state machine with explicit transition validation. Commands that are illegal from the current state return a structured error and do not mutate state.
 
@@ -78,7 +78,7 @@ Required properties:
 
 Tests enumerate every state-to-state pair and prove that the allowed-transition table is complete.
 
-## Work package 1.5 — Command and snapshot API
+## Work package 1.5 â€” Command and snapshot API
 
 Define an application-facing controller interface independent of the UI toolkit:
 
@@ -101,7 +101,7 @@ The exact API may differ, but it must preserve these principles:
 
 Define commands for open, unload, play, pause, stop, seek, gain, mute, solo, reset, output preference, device selection, cache control, and shutdown. Unsupported commands return explicit feature errors until later phases implement them.
 
-## Work package 1.6 — Error and diagnostic contracts
+## Work package 1.6 â€” Error and diagnostic contracts
 
 Create `PlayerError` with:
 
@@ -114,7 +114,7 @@ Create `PlayerError` with:
 
 Create diagnostic snapshots with bounded fields. Avoid strings that grow without limit. Counters use saturating or checked behavior. File paths and URLs are represented by redacted display names unless a user-facing action explicitly requires the full value.
 
-## Work package 1.7 — Feature topology
+## Work package 1.7 â€” Feature topology
 
 Define Cargo features to prevent accidental runtime bloat:
 
@@ -128,7 +128,7 @@ Define Cargo features to prevent accidental runtime bloat:
 
 The production desktop binary enables the product set. The probe binary can enable format features without UI. Unit tests can use fake output and fake decoder features. Avoid deeply conditional domain types; feature gates should isolate implementations, not redefine semantics.
 
-## Work package 1.8 — Quality gates
+## Work package 1.8 â€” Quality gates
 
 Configure:
 
@@ -139,11 +139,11 @@ Configure:
 - Unsafe-code denial by default.
 - Unit, property, and integration test tiers.
 - Cross-compilation checks where practical.
-- Minimum supported Rust version policy or an explicit “pinned stable only” policy.
+- Minimum supported Rust version policy or an explicit â€œpinned stable onlyâ€ policy.
 
 Add architecture tests or scripts that detect forbidden dependency directions.
 
-## Work package 1.9 — Headless probe skeleton
+## Work package 1.9 â€” Headless probe skeleton
 
 Create `stemplayer-probe` with commands such as:
 
@@ -201,7 +201,7 @@ Phase 1 is complete when the independent workspace builds on Windows and compile
 
 Status: exit gate passed.
 
-Implementation remained limited to `stemplayer-native/`. The Phase 0 probe and evidence are intact.
+Implementation remained limited to ``. The Phase 0 probe and evidence are intact.
 
 ### Deliverables
 
@@ -223,7 +223,7 @@ Implementation remained limited to `stemplayer-native/`. The Phase 0 probe and e
 | Windows contracts | `cargo test --locked --all-features` | PASS, 28 tests |
 | Feature topology | `cargo check --locked --no-default-features` and `cargo check --locked --all-features` | PASS |
 | Ubuntu WSL2 | all-feature tests plus no-default-feature check, Rust 1.97.1 | PASS, 28 tests |
-| Standalone boundary | copied to `C:\tmp\stemplayer-native-phase1-boundary-019f894b`; `cargo test --locked --offline --all-features` | PASS, 28 tests |
+| Standalone boundary | copied to `C:\tmp\native player-phase1-boundary-019f894b`; `cargo test --locked --offline --all-features` | PASS, 28 tests |
 | Dependency direction | architecture tests plus `cargo tree --locked -p stemplayer-engine` | PASS, no UI/platform/network dependency |
 | Forbidden coupling | exact Rust/Cargo/build-script scan for webplayer, converter, Node.js, pnpm, Python, and FFmpeg references | PASS, zero matches |
 | Dependency policy | current `cargo audit` and `cargo deny list --format json` | PASS, zero vulnerabilities and zero unlicensed packages; four accepted unmaintained Phase 0 transitive warnings |
@@ -234,6 +234,6 @@ Implementation remained limited to `stemplayer-native/`. The Phase 0 probe and e
 - Probe size: 347,648 bytes debug and 188,416 bytes release.
 - Warm Ubuntu WSL2 all-feature test run: 1.25 seconds elapsed and 83,000 KiB maximum resident set.
 - Domain crates and the headless controller contain zero thread-spawn calls. The headless controller documents and creates zero worker threads.
-- Machine-readable evidence: `stemplayer-native/artifacts/phase1/qualification.json`.
+- Machine-readable evidence: `artifacts/phase1/qualification.json`.
 
 ### Decisions and limitations
