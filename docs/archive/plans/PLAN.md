@@ -6,7 +6,7 @@ This plan defines a new, fully native, cross-platform stem player written in Rus
 
 The native player is also independent from the stem converter. It consumes supported files and URLs; it does not run separation, model installation, Python, PyTorch, converter export jobs, or converter-specific IPC.
 
-The deliverable is a stable desktop player with the capabilities users expect from the webplayerÃ¢â‚¬â€sample-synchronous stem playback, four-stem mixing, optional master reference, frame-accurate transport, waveform navigation, local container playback, Studio WAV bundle playback, and eventually `stem-hls-v1` playbackÃ¢â‚¬â€implemented with a native Rust UI and a native Rust audio engine.
+The deliverable is a stable desktop player with the capabilities users expect from the webplayerÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Âsample-synchronous stem playback, four-stem mixing, optional master reference, frame-accurate transport, waveform navigation, local container playback, Studio WAV bundle playback, and eventually `stem-hls-v1` playbackÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Âimplemented with a native Rust UI and a native Rust audio engine.
 
 ## 2. Non-negotiable project boundary
 
@@ -19,9 +19,9 @@ The following constraints apply to every phase:
 5. **Standalone installation.** A user can install and run the native player without installing Node.js, pnpm, Python, FFmpeg, the converter, or the webplayer.
 6. **Independent release lifecycle.** The native player has its own versioning, CI, artifacts, signing, release notes, and rollback process.
 
-If the native project is temporarily hosted in the same Git repository, it must still be an isolated Cargo workspace with independent CI paths and no changes to the webplayerÃ¢â‚¬â„¢s source or build files. A separate repository is preferred because it makes the boundary mechanically enforceable.
+If the native project is temporarily hosted in the same Git repository, it must still be an isolated Cargo workspace with independent CI paths and no changes to the webplayerÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s source or build files. A separate repository is preferred because it makes the boundary mechanically enforceable.
 
-## 3. Definition of Ã¢â‚¬Å“fully nativeÃ¢â‚¬Â
+## 3. Definition of ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œfully nativeÃƒÂ¢Ã¢â€šÂ¬Ã‚Â
 
 The target implementation is:
 
@@ -38,36 +38,36 @@ The plan is written with **Slint** as the default UI toolkit because it provides
 
 ```text
 Native UI
-  Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ application/controller layer
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ commands
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ immutable snapshots
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ settings
-        Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ lifecycle
-              Ã¢â€â€š
-              Ã¢â€“Â¼
+  ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ application/controller layer
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ commands
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ immutable snapshots
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ settings
+        ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ lifecycle
+              ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡
+              ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â¼
         Native playback engine
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ source inspection
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ timeline mapping
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ bounded decode workers
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ synchronized 8/10-channel source ring
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ transport state machine
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ four-stem mixer
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ optional master-reference bus
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stereo output resampler
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ small device-output ring
-        Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ diagnostics
-              Ã¢â€â€š
-              Ã¢â€“Â¼
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ source inspection
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ timeline mapping
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ bounded decode workers
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ synchronized 8/10-channel source ring
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ transport state machine
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ four-stem mixer
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ optional master-reference bus
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stereo output resampler
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ small device-output ring
+        ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ diagnostics
+              ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡
+              ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â¼
         Native audio output
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ WASAPI on Windows
-        Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ CoreAudio on macOS
-        Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ PipeWire/PulseAudio/ALSA policy on Linux
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ WASAPI on Windows
+        ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ CoreAudio on macOS
+        ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ PipeWire/PulseAudio/ALSA policy on Linux
 
 Independent services
-  Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ waveform analyzer and cache
-  Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ optional HLS client
-  Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ platform media controls
-  Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ release/update service
+  ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ waveform analyzer and cache
+  ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ optional HLS client
+  ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ platform media controls
+  ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ release/update service
 ```
 
 The audio device callback is the strict real-time boundary. It only copies prepared stereo samples, performs unavoidable sample-format conversion, advances counters, and writes silence on underrun. It does not decode, allocate, lock a normal mutex, log, perform I/O, parse JSON, update the UI, or execute network operations.
@@ -156,36 +156,36 @@ The native player does not need to support arbitrary media files. It should fail
 
 ```text
 
-Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ Cargo.toml
-Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ rust-toolchain.toml
-Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ crates/
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-domain/       roles, states, errors, commands, snapshots
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-format/       manifest, WAV, MP4, HLS validation
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-timeline/     rational time and absolute-frame mapping
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-decode/       PCM, AAC-LC, ALAC adapters
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-engine/       session, transport, workers, synchronized ring
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-mixer/        gains, mute/solo, A/B, ramps
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-output/       CPAL, device policy, resampling, output ring
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-waveform/     peak pyramids and cache
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-network/      optional HLS client
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-platform/     dialogs, media controls, power, paths
-Ã¢â€â€š   Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-ui/           native UI adapter and presentation model
-Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ apps/
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer/              production desktop binary
-Ã¢â€â€š   Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ stemplayer-probe/        headless inspection/qualification binary
-Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ fixtures/
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ public/
-Ã¢â€â€š   Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ README.md
-Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ tests/
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ conformance/
-Ã¢â€â€š   Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ integration/
-Ã¢â€â€š   Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ soak/
-Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ docs/
-    Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ architecture/
-    Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ decisions/
-    Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ formats/
-    Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ performance/
-    Ã¢â€â€Ã¢â€â‚¬Ã¢â€â‚¬ release/
+ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Cargo.toml
+ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ rust-toolchain.toml
+ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ crates/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-domain/       roles, states, errors, commands, snapshots
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-format/       manifest, WAV, MP4, HLS validation
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-timeline/     rational time and absolute-frame mapping
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-decode/       PCM, AAC-LC, ALAC adapters
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-engine/       session, transport, workers, synchronized ring
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-mixer/        gains, mute/solo, A/B, ramps
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-output/       CPAL, device policy, resampling, output ring
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-waveform/     peak pyramids and cache
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-network/      optional HLS client
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-platform/     dialogs, media controls, power, paths
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-ui/           native UI adapter and presentation model
+ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ apps/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer/              production desktop binary
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stemplayer-probe/        headless inspection/qualification binary
+ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ fixtures/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ public/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ README.md
+ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ tests/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ conformance/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ integration/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬Å¡   ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ soak/
+ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ docs/
+    ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ architecture/
+    ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ decisions/
+    ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ formats/
+    ÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ performance/
+    ÃƒÂ¢Ã¢â‚¬ÂÃ¢â‚¬ÂÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ release/
 ```
 
 Crates must have narrow dependency direction. UI and platform crates depend on domain and controller APIs; the engine never depends on the UI. The real-time output crate must not depend on networking, UI, serialization frameworks, or filesystem traversal.
@@ -306,28 +306,28 @@ Native macOS and Linux desktop/audio/renderer/accessibility/package testing is a
 | 8 | [PLAN_8.md](PLAN_8.md) | Complete native player UI and interaction model | 5, 6, 7 |
 | 9 | [PLAN_9.md](PLAN_9.md) | Waveforms, bounded cache, diagnostics, playback-priority policy | 5, 8 |
 | 10 | [PLAN_10.md](PLAN_10.md) | Native `stem-hls-v1` playback and grouped network buffering | 7, 9 |
-| 11 | [PLAN_11.md](PLAN_11.md) | OS integration, secure packaging, signing, installation | 8, 9; 10 for HLS parity release |
-| 12 | [PLAN_12.md](PLAN_12.md) | Windows qualification, performance proof, release gate, optional platform expansion | All release-scoped phases |
+| 11 | [PLAN_11.md](../../plans/PLAN_11.md) | OS integration, secure packaging, signing, installation | 8, 9; 10 for HLS parity release |
+| 12 | [PLAN_12.md](../../plans/PLAN_12.md) | Windows qualification, performance proof, release gate, optional platform expansion | All release-scoped phases |
 
 ## 13. Release milestones
 
-### Milestone A Ã¢â‚¬â€ Headless foundation
+### Milestone A ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Headless foundation
 
-Completed after Phases 0Ã¢â‚¬â€œ4. The project can inspect and decode bounded Studio WAV blocks and produce deterministic diagnostics, but it is not yet a user player.
+Completed after Phases 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“4. The project can inspect and decode bounded Studio WAV blocks and produce deterministic diagnostics, but it is not yet a user player.
 
-### Milestone B Ã¢â‚¬â€ Native local WAV player
+### Milestone B ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Native local WAV player
 
-Completed after Phases 5Ã¢â‚¬â€œ6. The application provides synchronized Studio WAV playback, transport, four-stem mixing, optional master A/B, and output resampling.
+Completed after Phases 5ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“6. The application provides synchronized Studio WAV playback, transport, four-stem mixing, optional master A/B, and output resampling.
 
-### Milestone C Ã¢â‚¬â€ Native local container beta
+### Milestone C ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Native local container beta
 
-Completed after Phases 7Ã¢â‚¬â€œ9. Local `.stem.m4a`, `.stem.mp4`, and Studio WAV sources have native playback, UI, waveforms, cache, and diagnostics.
+Completed after Phases 7ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“9. Local `.stem.m4a`, `.stem.mp4`, and Studio WAV sources have native playback, UI, waveforms, cache, and diagnostics.
 
-### Milestone D Ã¢â‚¬â€ Feature-parity release candidate
+### Milestone D ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Feature-parity release candidate
 
-Completed after Phases 10Ã¢â‚¬â€œ11. HLS, platform integration, installers, signing, and release packaging are present.
+Completed after Phases 10ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“11. HLS, platform integration, installers, signing, and release packaging are present.
 
-### Milestone E Ã¢â‚¬â€ General availability
+### Milestone E ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â General availability
 
 Completed when Phase 12 passes for Windows and all Windows release-blocking budgets have evidence. macOS or Linux joins the supported matrix only after its optional Phase 12 expansion passes.
 
