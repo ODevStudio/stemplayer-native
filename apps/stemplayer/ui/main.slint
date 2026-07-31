@@ -110,6 +110,7 @@ export component AppWindow inherits Window {
     callback select-output-device(int);
     callback select-playlist-item(int, bool, bool);
     callback context-select-playlist-item(int);
+    callback reorder-playlist-item(int, int);
     callback select-all-playlist-items();
     callback remove-playlist-items();
     callback activate-playlist-item(int);
@@ -495,6 +496,7 @@ export component AppWindow inherits Window {
             cache-progress: root.playlist-cache-progress;
             selected(index, control, shift) => { root.select-playlist-item(index, control, shift); }
             context-selected(index) => { root.context-select-playlist-item(index); }
+            reordered(from, to) => { root.reorder-playlist-item(from, to); }
             activated(index) => { root.activate-playlist-item(index); }
             select-all => { root.select-all-playlist-items(); }
             remove-selected => { root.remove-playlist-items(); }

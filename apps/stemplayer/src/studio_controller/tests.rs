@@ -12,6 +12,21 @@ fn cancelled_decode_is_not_published_as_an_error() {
 }
 
 #[test]
+fn playlist_reorder_preserves_completed_analysis() {
+    let first = PathBuf::from("first.mp3");
+    let second = PathBuf::from("second.mp3");
+    let third = PathBuf::from("third.mp3");
+    let mut analysis = PlaylistAnalysis::default();
+    analysis.replace(vec![first.clone(), second.clone()]);
+    analysis.completed = vec![true, false];
+
+    analysis.replace(vec![second, first, third]);
+
+    assert_eq!(analysis.completed, vec![false, true, false]);
+    assert!(analysis.active.is_none());
+}
+
+#[test]
 fn shutdown_bypasses_a_full_command_queue() {
     let controller = StudioController::new();
     for _ in 0..COMMAND_CAPACITY {

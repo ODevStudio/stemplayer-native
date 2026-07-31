@@ -601,3 +601,26 @@ Verification:
 - Isolated native Windows UI Automation: PASS for empty-playlist load without autoplay, repeated picker append, Control multi-selection, multi-row Delete, uninterrupted playback while appending and removing inactive rows, immediate settings persistence, and reduced-order restore without autoplay after restart.
 - Right-click reached the context-selection callback and preserved the multi-selection in native automation. Slint `PopupWindow` does not expose its child button through Windows UI Automation, so direct automated activation of Remove remains an operator check; the popup, outside-click policy, Escape binding, and shared removal callback compile in the release build.
 - Full raw `git diff --check`: PASS; only existing line-ending conversion warnings were reported.
+
+### 2026-07-31 - Playlist context menu and ordering correction
+
+Status: blocked. Phase 11 entry blockers are unchanged and the phase does not advance.
+
+Implemented:
+
+- Moved the Remove popup out of the repeated row and onto the stable playlist panel so the context-selection model refresh no longer destroys the popup before it can be used.
+- Added an opaque palette-backed popup surface so playlist text no longer shows through the Remove action.
+- Added pointer-driven in-list reordering with a target indicator, central index remapping for selection, focus, anchor, and the active title, plus immediate engine-order and settings persistence.
+- Preserved completed and in-progress waveform-analysis entries by source path when playlist order changes, preventing reorder from restarting the cache queue or redisplaying progress.
+- Kept same-length Slint playlist models stable across selection refreshes so double-click state and keyboard focus survive, and bound Return to the same Open-then-Play activation path. Open initializes playback at frame zero without a redundant seek transition.
+
+Verification:
+
+- `cargo test --locked -p stemplayer`: PASS, 24 passed and 1 existing hardware-gated test ignored. The added reorder tests cover source order, selection, focus, anchor, active-title remapping, invalid/no-op moves, and preserved analysis completion by path.
+- `cargo clippy --locked -p stemplayer --all-targets -- -D warnings`: PASS with no issues.
+- `cargo fmt --all -- --check`: PASS.
+- `cargo build --locked --release -p stemplayer`: PASS in the normal release path.
+- Native Windows pointer test: PASS. Dragging the first row onto the third changed the visible order and retained it through the central playlist source update.
+- Native Windows cache-progress test: PASS. After the queue settled, reordering the first row onto the third displayed no progress value during the following five seconds; the operator confirmed the result.
+- Native Windows activation test: PASS. Initial double-click started playback, a second double-click restarted at 0:00, Return restarted the focused row at 0:00, and no transport error appeared.
+- Native operator check: PASS. Right-click Remove was usable; the reported transparency was corrected with an opaque popup surface.

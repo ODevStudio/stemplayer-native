@@ -235,9 +235,31 @@ struct PlaylistAnalysisItem {
 
 impl PlaylistAnalysis {
     fn replace(&mut self, sources: Vec<PathBuf>) {
-        self.completed = vec![false; sources.len()];
+        let active_source = self
+            .active
+            .as_ref()
+            .and_then(|active| self.sources.get(active.index))
+            .cloned();
+        let completed = sources
+            .iter()
+            .map(|source| {
+                self.sources
+                    .iter()
+                    .position(|existing| existing == source)
+                    .is_some_and(|index| self.completed[index])
+            })
+            .collect();
+        if let Some(active) = self.active.as_mut() {
+            active.index = active_source
+                .and_then(|source| sources.iter().position(|item| *item == source))
+                .unwrap_or(sources.len());
+        }
+        self.active = self
+            .active
+            .take()
+            .filter(|active| active.index < sources.len());
         self.sources = sources;
-        self.active = None;
+        self.completed = completed;
     }
 
     fn mark_source(&mut self, source: &Path) {

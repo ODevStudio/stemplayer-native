@@ -42,6 +42,7 @@ export component PlaylistPanel inherits Rectangle {
     in property <string> cache-progress: "";
     callback selected(int, bool, bool);
     callback context-selected(int);
+    callback reordered(int, int);
     callback activated(int);
     callback select-all();
     callback remove-selected();
@@ -55,6 +56,10 @@ export component PlaylistPanel inherits Rectangle {
     border-radius: 3px;
     accessible-role: list;
     accessible-label: "Track list";
+    private property <int> drag-source: -1;
+    private property <int> drag-target: -1;
+    private property <length> context-popup-x: 0px;
+    private property <length> context-popup-y: 0px;
 
     IconButton {
         x: 2px;
@@ -101,16 +106,19 @@ export component PlaylistPanel inherits Rectangle {
         height: parent.height - 36px;
         KeyBinding { keys: @keys(Control + A); activated => { root.select-all(); } }
         KeyBinding { keys: @keys(Delete); activated => { root.remove-selected(); } }
+        KeyBinding { keys: @keys(Return); activated => { if root.selected-index >= 0 { root.activated(root.selected-index); } } }
         ScrollView {
             width: parent.width;
             height: parent.height;
             vertical-scrollbar-policy: ScrollBarPolicy.always-on;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-            VerticalLayout {
+            list-rows := VerticalLayout {
                 spacing: 1px;
                 for item[index] in root.items: row := Rectangle {
                     height: 27px;
                     background: item.selected ? Palette.selection-background : row-area.has-hover ? Palette.background : transparent;
+                    border-color: index == root.drag-target && root.drag-target != root.drag-source ? Palette.accent-background : transparent;
+                    border-width: index == root.drag-target && root.drag-target != root.drag-source ? 1px : 0px;
                     accessible-role: list-item;
                     accessible-label: item.label;
                     Text {
@@ -128,40 +136,72 @@ export component PlaylistPanel inherits Rectangle {
                             root.activated(index);
                         }
                         pointer-event(event) => {
-                            if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                root.drag-source = index;
+                                root.drag-target = index;
+                            } else if event.kind == PointerEventKind.move && root.drag-source >= 0 {
+                                root.drag-target = min(
+                                    root.items.length - 1,
+                                    max(0, floor((row-area.absolute-position.y + row-area.mouse-y - list-rows.absolute-position.y) / 28px)),
+                                );
+                            } else if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
                                 list-focus.focus();
-                                root.selected(index, event.modifiers.control, event.modifiers.shift);
+                                if root.drag-source >= 0 && root.drag-target >= 0 && root.drag-source != root.drag-target {
+                                    root.reordered(root.drag-source, root.drag-target);
+                                } else {
+                                    root.selected(index, event.modifiers.control, event.modifiers.shift);
+                                }
+                                root.drag-source = -1;
+                                root.drag-target = -1;
                             } else if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
                                 list-focus.focus();
+                                root.context-popup-x = min(
+                                    row-area.absolute-position.x + row-area.mouse-x - root.absolute-position.x,
+                                    root.width - 120px,
+                                );
+                                root.context-popup-y = min(
+                                    row-area.absolute-position.y + row-area.mouse-y - root.absolute-position.y,
+                                    root.height - 36px,
+                                );
                                 root.context-selected(index);
                                 remove-popup.show();
+                            } else if event.kind == PointerEventKind.cancel {
+                                root.drag-source = -1;
+                                root.drag-target = -1;
                             }
                         }
-                        remove-popup := PopupWindow {
-                            x: min(
-                                row-area.absolute-position.x + row-area.mouse-x - root.absolute-position.x,
-                                root.width - self.width,
-                            );
-                            y: row-area.absolute-position.y + row-area.mouse-y - root.absolute-position.y;
-                            width: 120px;
-                            height: 36px;
+                    }
+                }
+            }
+        }
+    }
 
-                            popup-focus := FocusScope {
-                                width: parent.width;
-                                height: parent.height;
-                                KeyBinding { keys: @keys(Escape); activated => { remove-popup.close(); } }
+    remove-popup := PopupWindow {
+        x: root.context-popup-x;
+        y: root.context-popup-y;
+        width: 120px;
+        height: 36px;
 
-                                Button {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    text: "Remove";
-                                    clicked => {
-                                        remove-popup.close();
-                                        root.remove-selected();
-                                    }
-                                }
-                            }
-                        }
+        Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: Palette.alternate-background;
+            border-color: Palette.border;
+            border-width: 1px;
+            border-radius: 3px;
+
+            popup-focus := FocusScope {
+                width: parent.width;
+                height: parent.height;
+                KeyBinding { keys: @keys(Escape); activated => { remove-popup.close(); } }
+
+                Button {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "Remove";
+                    clicked => {
+                        remove-popup.close();
+                        root.remove-selected();
                     }
                 }
             }

@@ -200,6 +200,30 @@ impl Playlist {
         }
         true
     }
+
+    pub fn move_item(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.items.len() || to >= self.items.len() || from == to {
+            return false;
+        }
+        let item = self.items.remove(from);
+        self.items.insert(to, item);
+        let remap = |index| {
+            if index == from {
+                to
+            } else if from < to && index > from && index <= to {
+                index - 1
+            } else if to < from && index >= to && index < from {
+                index + 1
+            } else {
+                index
+            }
+        };
+        self.selected = self.selected.iter().copied().map(remap).collect();
+        self.focus = self.focus.map(remap);
+        self.anchor = self.anchor.map(remap);
+        self.active = self.active.map(remap);
+        true
+    }
 }
 pub fn discover(inputs: &[PathBuf]) -> Result<Vec<PlaylistItem>, PlayerError> {
     if inputs.len() > MAX_PLAYLIST_ITEMS {
@@ -587,6 +611,32 @@ mod tests {
         assert_eq!(playlist.active, None);
         assert_eq!(playlist.selected(), None);
         assert_eq!(playlist.next(), None);
+    }
+
+    #[test]
+    fn moving_items_preserves_selection_focus_and_active_source() {
+        let mut playlist = Playlist::default();
+        playlist.append((0..5).map(item).collect());
+        playlist.activate(1);
+        playlist.select(3, true, false);
+
+        assert!(playlist.move_item(1, 4));
+        assert_eq!(
+            playlist.sources(),
+            vec![
+                "track-0.mp3",
+                "track-2.mp3",
+                "track-3.mp3",
+                "track-4.mp3",
+                "track-1.mp3",
+            ]
+        );
+        assert_eq!(playlist.selected, BTreeSet::from([2, 4]));
+        assert_eq!(playlist.focus, Some(2));
+        assert_eq!(playlist.anchor, Some(2));
+        assert_eq!(playlist.active, Some(4));
+        assert!(!playlist.move_item(4, 4));
+        assert!(!playlist.move_item(8, 0));
     }
     #[test]
     fn discovers_ordinary_formats_without_promoting_incomplete_wav_stems() {

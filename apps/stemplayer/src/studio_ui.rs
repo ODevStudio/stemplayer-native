@@ -2,7 +2,7 @@ use crate::playlist::{Playlist, discover};
 use crate::studio_controller::StudioController;
 use crate::{AppWindow, PlaylistRow};
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
-use slint::{Color, ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -248,6 +248,29 @@ pub fn wire(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             playlist.remove_selected().then(|| playlist.source_paths())
         };
+        if let Some(sources) = sources {
+            let _ = current.set_playlist_sources(sources);
+            present_playlist(&weak, &current_playlist);
+            persist_playlist(current_settings.as_deref(), &current_playlist);
+        }
+    });
+
+    let weak = app.as_weak();
+    let current = Arc::clone(&controller);
+    let current_playlist = Arc::clone(&playlist);
+    let current_settings = settings_path.clone();
+    app.on_reorder_playlist_item(move |from, to| {
+        let sources = usize::try_from(from)
+            .ok()
+            .zip(usize::try_from(to).ok())
+            .and_then(|(from, to)| {
+                let mut playlist = current_playlist
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                playlist
+                    .move_item(from, to)
+                    .then(|| playlist.source_paths())
+            });
         if let Some(sources) = sources {
             let _ = current.set_playlist_sources(sources);
             present_playlist(&weak, &current_playlist);
@@ -956,7 +979,20 @@ fn present_playlist(window: &slint::Weak<AppWindow>, playlist: &Arc<Mutex<Playli
         )
     };
     if let Some(app) = window.upgrade() {
-        app.set_playlist_items(playlist_model(&rows));
+        let model = app.get_playlist_items();
+        if model.row_count() == rows.len() {
+            for (index, (label, selected)) in rows.iter().enumerate() {
+                model.set_row_data(
+                    index,
+                    PlaylistRow {
+                        label: label.into(),
+                        selected: *selected,
+                    },
+                );
+            }
+        } else {
+            app.set_playlist_items(playlist_model(&rows));
+        }
         app.set_playlist_index(selected);
     }
 }
