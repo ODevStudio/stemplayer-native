@@ -6,6 +6,4 @@
 - `formats/` contains native format profiles and conformance rules.
 - `measurement/` contains measurement methodology and schemas.
 - `qualification/` contains concise, redacted evidence summaries.
-- `archive/` contains non-authoritative historical plans.
-
 `STATUS.md` is the only authoritative current-status document. Historical plans are not implementation authority.

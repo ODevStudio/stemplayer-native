@@ -93,7 +93,7 @@ Stress runs may permit controlled buffering, but never drift, corruption, or unc
 
 ## Work package 12.5 — Performance qualification
 
-Measure every budget from `PLAN.md` using release builds:
+Measure every budget from the Phase 0 decision record using release builds:
 
 - Idle private memory.
 - Playback memory by source type.

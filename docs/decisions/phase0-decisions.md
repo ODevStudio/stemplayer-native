@@ -65,7 +65,7 @@ No internal ring, hash, HTTP, or decoder abstraction is built in Phase 0 beyond 
 
 ## Budgets
 
-Decision: accept the initial budgets in `docs/archive/plans/PLAN.md` unchanged. They are acceptance limits, not current claims. In particular, the 50 MiB idle process-set budget includes all application processes and renderer allocations visible to the OS. A missed budget changes implementation or dependency choice; it does not lower the gate without product and release/security owner approval.
+Decision: accept the initial budgets listed in this decision record unchanged. They are acceptance limits, not current claims. In particular, the 50 MiB idle process-set budget includes all application processes and renderer allocations visible to the OS. A missed budget changes implementation or dependency choice; it does not lower the gate without product and release/security owner approval.
 
 ## Release And Security Defaults
 
