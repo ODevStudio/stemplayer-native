@@ -1,17 +1,11 @@
 # Contributing
 
-Keep changes inside the native repository. Do not add a checkout dependency on the web player or converter, and do not commit private media, generated reports, screenshots, machine paths, or credentials.
+Keep changes inside the native repository and preserve its standalone runtime boundary. Do not commit private media, generated qualification output, screenshots, machine-specific paths, signing material, tokens, or credentials.
 
-Preserve `Cargo.lock`, `rust-toolchain.toml`, workspace path dependencies, and the declared format profiles. Security checks at file, URL, manifest, and archive boundaries are required even when a change is small.
+Before editing, read the nearest applicable `AGENTS.md`. For ownership and architecture, start with the [repository map](docs/agent/repository-map.md). Security-sensitive changes must preserve the documented bounds in `SECURITY.md`, `docs/formats/`, and the relevant architecture or compatibility reference.
 
-Before submitting a change, run the narrowest relevant checks and then the full locked workspace checks when shared behavior or public contracts change:
+Use the narrowest test while iterating, then run the verification tier defined in the [verification guide](docs/agent/verification.md). Test placement, fixtures, and manual qualification boundaries are defined in the [test strategy](docs/maintenance/test-strategy.md).
 
-```powershell
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --workspace
-cargo check --locked --no-default-features
-cargo check --locked --all-features
-```
+Documentation follows the [documentation policy](docs/maintenance/documentation-policy.md): one authority per fact, short indexes, progressive disclosure, and deletion of dead material rather than an ever-growing archive.
 
-Record user-visible behavior and qualification results in `CHANGELOG.md` or `docs/qualification/`. Keep current phase status in `STATUS.md` only.
+Record user-visible completed behavior in `CHANGELOG.md`, current blockers only in `STATUS.md`, durable decisions in `docs/decisions/`, and concise redacted evidence in `docs/qualification/`.
