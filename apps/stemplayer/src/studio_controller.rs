@@ -45,6 +45,7 @@ struct Shared {
     snapshot: RwLock<PlayerSnapshot>,
     waveform: RwLock<Option<WaveformSnapshot>>,
     subscribers: Mutex<Vec<SnapshotPublisher>>,
+    command_admission: Mutex<()>,
     cancel: Arc<AtomicBool>,
     epoch: AtomicU64,
     shutdown: AtomicBool,
@@ -70,6 +71,7 @@ impl StudioController {
             snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
             waveform: RwLock::new(None),
             subscribers: Mutex::new(Vec::new()),
+            command_admission: Mutex::new(()),
             cancel: Arc::new(AtomicBool::new(false)),
             epoch: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
@@ -109,12 +111,7 @@ impl StudioController {
                 "Playlist exceeds its analysis limit",
             ));
         }
-        self.sender
-            .try_send(QueuedCommand {
-                command: WorkerCommand::SetPlaylist(sources),
-                epoch: self.shared.epoch.load(Ordering::Acquire),
-            })
-            .map_err(command_send_error)
+        self.enqueue(WorkerCommand::SetPlaylist(sources), false)
     }
 
     pub fn shutdown_and_join(&self) {
@@ -130,6 +127,11 @@ impl StudioController {
     }
 
     fn signal_shutdown(&self) {
+        let _admission = self
+            .shared
+            .command_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.shared.shutdown.store(true, Ordering::Release);
         self.shared.cancel.store(true, Ordering::Release);
         let _ = self.sender.try_send(QueuedCommand {
@@ -151,6 +153,28 @@ impl StudioController {
                 )
             })
     }
+
+    fn enqueue(&self, command: WorkerCommand, invalidates: bool) -> Result<(), PlayerError> {
+        let _admission = self
+            .shared
+            .command_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current_epoch = self.shared.epoch.load(Ordering::Acquire);
+        let epoch = if invalidates {
+            current_epoch.wrapping_add(1)
+        } else {
+            current_epoch
+        };
+        self.sender
+            .try_send(QueuedCommand { command, epoch })
+            .map_err(command_send_error)?;
+        if invalidates {
+            self.shared.epoch.store(epoch, Ordering::Release);
+            self.shared.cancel.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
 }
 
 impl PlayerController for StudioController {
@@ -168,18 +192,7 @@ impl PlayerController for StudioController {
                 | PlayerCommand::SeekFrame(_)
                 | PlayerCommand::SeekTime(_)
         );
-        let epoch = if invalidates {
-            self.shared.cancel.store(true, Ordering::Release);
-            self.shared.epoch.fetch_add(1, Ordering::AcqRel) + 1
-        } else {
-            self.shared.epoch.load(Ordering::Acquire)
-        };
-        self.sender
-            .try_send(QueuedCommand {
-                command: WorkerCommand::Player(command),
-                epoch,
-            })
-            .map_err(command_send_error)?;
+        self.enqueue(WorkerCommand::Player(command), invalidates)?;
         Ok(id)
     }
 
@@ -1053,12 +1066,22 @@ fn worker_loop(
         };
         match receiver.recv_timeout(timeout) {
             Ok(queued) => {
-                if queued.epoch < shared.epoch.load(Ordering::Acquire)
-                    && matches!(&queued.command, WorkerCommand::Player(_))
-                {
+                let stale = {
+                    let _admission = shared
+                        .command_admission
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let stale = shared.shutdown.load(Ordering::Acquire)
+                        || (queued.epoch < shared.epoch.load(Ordering::Acquire)
+                            && matches!(&queued.command, WorkerCommand::Player(_)));
+                    if !stale {
+                        shared.cancel.store(false, Ordering::Release);
+                    }
+                    stale
+                };
+                if stale {
                     continue;
                 }
-                shared.cancel.store(false, Ordering::Release);
                 if let Err(error) = state.handle(queued.command, &shared)
                     && should_publish_error(&error, shared.cancel.load(Ordering::Acquire))
                 {

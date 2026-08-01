@@ -5,7 +5,7 @@ use slint::ComponentHandle;
 
 #[cfg(all(feature = "local-wav", not(feature = "development")))]
 mod playlist;
-#[cfg(all(feature = "local-wav", not(feature = "development")))]
+#[cfg(all(feature = "local-wav", any(test, not(feature = "development"))))]
 mod studio_controller;
 #[cfg(all(feature = "local-wav", not(feature = "development")))]
 mod studio_ui;
