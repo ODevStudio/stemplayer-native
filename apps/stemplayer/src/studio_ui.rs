@@ -829,10 +829,10 @@ fn spawn_playlist_picker(
     controller: Arc<StudioController>,
     settings_path: Option<std::path::PathBuf>,
 ) {
+    let Some(paths) = choose_sources() else {
+        return;
+    };
     std::thread::spawn(move || {
-        let Some(paths) = choose_sources() else {
-            return;
-        };
         apply_playlist(
             discover(&paths).unwrap_or_default(),
             playlist,
@@ -1052,7 +1052,7 @@ fn diagnostics_json(
     serde_json::to_vec_pretty(&value)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn choose_sources() -> Option<Vec<std::path::PathBuf>> {
     rfd::FileDialog::new()
         .set_title("Open stem files")
@@ -1063,12 +1063,12 @@ fn choose_sources() -> Option<Vec<std::path::PathBuf>> {
         .pick_files()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn choose_sources() -> Option<Vec<std::path::PathBuf>> {
     std::env::var_os("STEMPLAYER_SOURCE").map(|path| vec![path.into()])
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn choose_diagnostics_export() -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
         .set_title("Export diagnostics")
@@ -1077,7 +1077,7 @@ fn choose_diagnostics_export() -> Option<std::path::PathBuf> {
         .save_file()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn choose_diagnostics_export() -> Option<std::path::PathBuf> {
     std::env::var_os("STEMPLAYER_DIAGNOSTICS_EXPORT").map(std::path::PathBuf::from)
 }

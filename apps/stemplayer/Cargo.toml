@@ -15,8 +15,10 @@ product = [
     "alac",
     "hls",
     "diagnostics-ui",
-    "windows-integration",
 ]
+product-windows = ["product", "windows-integration"]
+product-macos = ["product", "macos-integration"]
+product-linux = ["product", "linux-integration"]
 development = ["stemplayer-ui/development"]
 local-wav = ["stemplayer-format/local-wav"]
 local-mp4 = ["stemplayer-format/local-mp4"]
@@ -43,8 +45,11 @@ stemplayer-ui.workspace = true
 stemplayer-waveform.workspace = true
 
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 rfd.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { workspace = true, features = ["xdg-portal", "async-std"] }
 
 [build-dependencies]
 slint-build.workspace = true

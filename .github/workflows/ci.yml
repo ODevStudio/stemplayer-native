@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -56,23 +56,41 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libasound2-dev libfontconfig1-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxkbcommon-x11-dev \
+            libx11-dev \
+            xinput \
+            xvfb
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Tests
         run: cargo test --locked --workspace --all-features
+      - name: Product tests
+        run: cargo test --locked -p stemplayer
+      - name: Product release build
+        run: cargo build --locked --release -p stemplayer
+      - name: UI startup smoke
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a cargo run --locked -p stemplayer --no-default-features --features development -- --ui-smoke 1000
+          else
+            cargo run --locked -p stemplayer --no-default-features --features development -- --ui-smoke 1000
+          fi
       - name: Minimal feature check
         run: cargo check --locked --workspace --no-default-features
       - name: Full feature check
         run: cargo check --locked --workspace --all-features
-      - name: Windows release build
-        if: runner.os == 'Windows'
-        run: cargo build --locked --release -p stemplayer
 
   dependency-policy:
     runs-on: ubuntu-24.04

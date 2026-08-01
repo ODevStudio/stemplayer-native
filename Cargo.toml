@@ -47,7 +47,7 @@ rubato = "=4.0.0"
 serde = { version = "=1.0.229", features = ["derive", "rc"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
-slint = { version = "=1.17.1", default-features = false, features = ["std", "backend-winit-x11", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
+slint = { version = "=1.17.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
 slint-build = "=1.17.1"
 stemplayer-decode = { path = "crates/stemplayer-decode" }
 stemplayer-domain = { path = "crates/stemplayer-domain" }
