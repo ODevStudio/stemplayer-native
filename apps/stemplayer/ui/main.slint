@@ -8,8 +8,8 @@ export component AppWindow inherits Window {
     preferred-height: 620px;
     min-width: 560px;
     min-height: root.playlist-items.length > 0
-        ? 264px + (root.playlist-expanded ? min(190px, 34px + root.playlist-items.length * 28px) : 34px)
-        : 256px;
+        ? 296px + (root.playlist-expanded ? min(190px, 34px + root.playlist-items.length * 28px) : 34px)
+        : 288px;
     background: Palette.background;
     accessible-role: main;
     accessible-label: "Stemplayer native player";
@@ -270,6 +270,61 @@ export component AppWindow inherits Window {
                 accessible-label: "Player settings";
                 clicked => { root.settings-visible = !root.settings-visible; }
             }
+            }
+        }
+
+        Rectangle {
+            min-height: 24px;
+            preferred-height: 24px;
+            max-height: 24px;
+            background: Palette.alternate-background;
+            accessible-role: groupbox;
+            accessible-label: root.state-text
+                + (root.buffering-text == "" ? "" : ". " + root.buffering-text)
+                + (root.source-summary == "" ? "" : ". " + root.source-summary)
+                + ". " + root.output-mode + ". " + root.device-name;
+            HorizontalBox {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                Text {
+                    width: 64px;
+                    text: root.state-text;
+                    font-size: 11px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.buffering-text != "": Text {
+                    width: 64px;
+                    text: root.buffering-text;
+                    font-size: 11px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    text: root.source-summary;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    width: 144px;
+                    text: root.output-mode;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    width: 112px;
+                    text: root.device-name;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
         }
 

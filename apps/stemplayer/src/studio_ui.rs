@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use stemplayer_domain::{
     BoundedText, CacheCommand, DeviceId, OutputPreference, PlayerCommand, PlayerController,
-    SnapshotSubscription, SourceFrame, SourceLocator, StemRole, TransportState,
+    PlayerError, SnapshotSubscription, SourceFrame, SourceLocator, StemRole, TransportState,
 };
 use stemplayer_ui::{CommandAdapter, Playhead};
 
@@ -834,7 +834,7 @@ fn spawn_playlist_picker(
     };
     std::thread::spawn(move || {
         apply_playlist(
-            discover(&paths).unwrap_or_default(),
+            discover(&paths),
             playlist,
             window,
             controller,
@@ -851,7 +851,7 @@ fn discover_playlist_async(
 ) {
     std::thread::spawn(move || {
         apply_playlist(
-            discover(&paths).unwrap_or_default(),
+            discover(&paths),
             playlist,
             window,
             controller,
@@ -861,12 +861,20 @@ fn discover_playlist_async(
 }
 
 fn apply_playlist(
-    items: Vec<crate::playlist::PlaylistItem>,
+    items: Result<Vec<crate::playlist::PlaylistItem>, PlayerError>,
     playlist: Arc<Mutex<Playlist>>,
     window: slint::Weak<AppWindow>,
     controller: Arc<StudioController>,
     settings_path: Option<std::path::PathBuf>,
 ) {
+    let items = match items {
+        Ok(items) => items,
+        Err(error) => {
+            let snapshot = playlist_error_snapshot(controller.latest_snapshot(), error);
+            let _ = window.upgrade_in_event_loop(move |app| present(&app, &snapshot));
+            return;
+        }
+    };
     let (rows, selected, sources, initial_source) = {
         let mut playlist = playlist
             .lock()
@@ -892,6 +900,16 @@ fn apply_playlist(
         submit_playlist_source(&controller, source, false);
     }
 }
+
+fn playlist_error_snapshot(
+    snapshot: stemplayer_domain::PlayerSnapshot,
+    error: PlayerError,
+) -> stemplayer_domain::PlayerSnapshot {
+    let mut details = snapshot.details().clone();
+    details.error = Some(error);
+    snapshot.with_details(details)
+}
+
 fn submit_playlist_source(controller: &StudioController, path: std::path::PathBuf, play: bool) {
     let Some(value) = path.to_str() else {
         return;
@@ -1103,6 +1121,27 @@ mod tests {
         let (_, ids, selected) = output_device_options(Some("missing-device"));
         assert_eq!(selected, 0);
         assert_eq!(ids.first(), Some(&None));
+    }
+
+    #[test]
+    fn playlist_error_uses_existing_error_presentation() {
+        let error = stemplayer_domain::PlayerError::new(
+            stemplayer_domain::ErrorCode::ManifestInvalid,
+            "Dropped source is unavailable",
+        )
+        .with_user_action("Choose supported stem files");
+        let snapshot = playlist_error_snapshot(
+            stemplayer_domain::PlayerSnapshot::empty(TransportState::Empty),
+            error,
+        );
+        let model = stemplayer_ui::PresentationModel::from_snapshot(&snapshot);
+
+        assert_eq!(
+            model.error_banner.as_deref(),
+            Some("Dropped source is unavailable")
+        );
+        assert_eq!(model.error_action, "Choose supported stem files");
+        assert_eq!(model.error_code, "E_MANIFEST_INVALID");
     }
 
     #[test]

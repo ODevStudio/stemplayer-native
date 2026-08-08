@@ -40,7 +40,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.97"
 
 [workspace.dependencies]
-cpal = "=0.18.1"
+cpal = { version = "=0.18.1", features = ["realtime"] }
 rtrb = "=0.3.4"
 rfd = { version = "=0.15.4", default-features = false }
 rubato = "=4.0.0"
