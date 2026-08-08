@@ -5,7 +5,7 @@ use std::env;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use stemplayer_decode::{MAX_DECODE_FRAMES, decode_window, inspect_compressed_container};
-use stemplayer_domain::{ErrorCode, GenerationId, PlayerError};
+use stemplayer_domain::{ErrorCode, GenerationId, PlayerError, TransportState};
 use stemplayer_engine::{PlaybackEngine, PlaybackSession};
 use stemplayer_format::{BoundedReader, StudioBundle, StudioRole, inspect_mp4_structure};
 use stemplayer_output::{
@@ -173,16 +173,15 @@ fn hls_playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json
     let mut engine = stemplayer_engine::PlaybackEngine::with_cancellation(session, cancellation)
         .map_err(Failure::Internal)?;
     engine.play().map_err(Failure::Internal)?;
+    wait_for_playback(&mut engine)?;
     let mut output = [stemplayer_output::StereoFrame::default(); 4096];
     let mut rendered = 0_u64;
     while !engine.source_exhausted() {
         engine.refill().map_err(Failure::Internal)?;
         let frames = engine.render(&mut output).map_err(Failure::Internal)?;
         if frames == 0 {
-            return Err(Failure::Internal(PlayerError::new(
-                ErrorCode::HlsGroupBufferingTimeout,
-                "HLS playback simulation made no progress",
-            )));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            continue;
         }
         rendered = rendered.saturating_add(frames as u64);
     }
@@ -196,7 +195,7 @@ fn hls_playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json
             .seek(stemplayer_domain::SourceFrame::new(target as i64))
             .map_err(Failure::Internal)?;
         engine.play().map_err(Failure::Internal)?;
-        engine.refill().map_err(Failure::Internal)?;
+        wait_for_playback(&mut engine)?;
         if engine.render(&mut output).map_err(Failure::Internal)? == 0 {
             return Err(Failure::Internal(PlayerError::new(
                 ErrorCode::HlsGroupBufferingTimeout,
@@ -260,6 +259,7 @@ fn playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json::Va
     };
     let mut engine = PlaybackEngine::new(session).map_err(Failure::Internal)?;
     engine.play().map_err(Failure::Internal)?;
+    wait_for_playback(&mut engine)?;
 
     let mut output = [StereoFrame::default(); 2_048];
     let source_rate = engine.sample_rate().get();
@@ -292,6 +292,10 @@ fn playback_sim(mut args: impl Iterator<Item = String>) -> Result<serde_json::Va
                 .render(&mut output[..needed])
                 .map_err(Failure::Internal)?
         };
+        if produced == 0 && !engine.source_exhausted() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            continue;
+        }
         let converted = resampler
             .process(&output[..produced], engine.source_exhausted())
             .map_err(Failure::Internal)?;
@@ -378,6 +382,8 @@ fn container_seek_test(
         engine
             .seek(stemplayer_domain::SourceFrame::new(target as i64))
             .map_err(Failure::Validation)?;
+        engine.play().map_err(Failure::Internal)?;
+        wait_for_playback(&mut engine)?;
         let diagnostics = engine
             .snapshot()
             .map_err(Failure::Internal)?
@@ -393,7 +399,6 @@ fn container_seek_test(
         latencies.push(diagnostics.seek_latency_us);
         maximum_packets = maximum_packets.max(diagnostics.seek_packet_count);
         maximum_discarded = maximum_discarded.max(diagnostics.seek_discarded_frames);
-        engine.play().map_err(Failure::Internal)?;
         let rendered = engine.render(&mut output).map_err(Failure::Internal)?;
         if rendered != output.len()
             || output
@@ -418,6 +423,21 @@ fn container_seek_test(
         "maximum_discarded_frames": maximum_discarded,
         "window_frames": output.len()
     }))
+}
+
+fn wait_for_playback(engine: &mut PlaybackEngine) -> Result<(), Failure> {
+    while engine.state() == TransportState::Priming {
+        engine.refill().map_err(Failure::Internal)?;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    if engine.state() == TransportState::Playing {
+        Ok(())
+    } else {
+        Err(Failure::Internal(PlayerError::new(
+            ErrorCode::PlaybackNotReady,
+            "Playback did not finish priming",
+        )))
+    }
 }
 
 fn studio_report(

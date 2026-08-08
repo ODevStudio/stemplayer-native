@@ -35,7 +35,6 @@ pub struct HlsDiagnostics {
 
 struct CachedGroup {
     index: usize,
-    encoded: Vec<Vec<u8>>,
     decoded: Vec<DecodedSegment>,
     bytes: usize,
 }
@@ -152,7 +151,6 @@ impl HlsPlaybackSource {
         let descriptor = &self.playlists[0].segments[index];
         let expected_frames =
             usize::try_from(descriptor.end_frame_exclusive - descriptor.start_frame).unwrap();
-        let mut encoded = Vec::with_capacity(self.playlists.len());
         let mut decoded = Vec::with_capacity(self.playlists.len());
         for playlist in &self.playlists {
             if cancelled.load(Ordering::Acquire) {
@@ -165,20 +163,18 @@ impl HlsPlaybackSource {
             let maximum = segment_limit(self.manifest.bitrate_bps, segment.duration_us)?;
             let bytes = self.fetch_with_retry(&segment.url, maximum, cancelled)?;
             let audio = decode_aac_segment(
-                bytes.clone(),
+                bytes,
                 self.manifest.sample_rate,
                 segment.trim_start_frames,
                 expected_frames,
                 cancelled,
             )?;
-            encoded.push(bytes);
             decoded.push(audio);
         }
-        let bytes = encoded.iter().map(Vec::len).sum::<usize>()
-            + decoded
-                .iter()
-                .map(|audio| (audio.left.len() + audio.right.len()) * size_of::<f32>())
-                .sum::<usize>();
+        let bytes = decoded
+            .iter()
+            .map(|audio| (audio.left.len() + audio.right.len()) * size_of::<f32>())
+            .sum::<usize>();
         if bytes > CACHE_CAPACITY_BYTES {
             return Err(invalid(
                 ErrorCode::HlsResponseTooLarge,
@@ -208,7 +204,6 @@ impl HlsPlaybackSource {
         }
         state.groups.push_front(CachedGroup {
             index,
-            encoded,
             decoded,
             bytes,
         });
@@ -326,7 +321,6 @@ impl ExternalSource for HlsPlaybackSource {
                     samples.push(audio.right[frame]);
                 }
             }
-            let _ = group.encoded.len();
             drop(state);
             current = copy_end;
         }

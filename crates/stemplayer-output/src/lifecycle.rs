@@ -75,7 +75,10 @@ impl DeviceLifecycle {
     }
 
     pub fn stop(&mut self) -> LifecycleAction {
-        if matches!(self.state, LifecycleState::Running | LifecycleState::Paused) {
+        if matches!(
+            self.state,
+            LifecycleState::Running | LifecycleState::Paused | LifecycleState::DeviceLost
+        ) {
             self.state = LifecycleState::Stopped;
             self.reopen_attempts = 0;
             LifecycleAction::StopStream
@@ -153,6 +156,15 @@ mod tests {
             lifecycle.retry_reopen(),
             LifecycleAction::ReportRecoverableError
         );
+    }
+
+    #[test]
+    fn stop_cancels_device_recovery() {
+        let mut lifecycle = DeviceLifecycle::new(2);
+        lifecycle.device_lost();
+        assert_eq!(lifecycle.stop(), LifecycleAction::StopStream);
+        assert_eq!(lifecycle.state(), LifecycleState::Stopped);
+        assert_eq!(lifecycle.retry_reopen(), LifecycleAction::None);
     }
 
     #[test]

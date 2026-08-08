@@ -34,7 +34,7 @@ Each validated track retains its original size and modification identity. Reopen
 
 ## Resource evidence
 
-The implementation is synchronous, so hashing and decoding each use zero worker threads and at most one open file. Inspection reads only the RIFF header, chunk headers, and `fmt ` bytes unless hash verification is requested. Hashing reads 64 KiB at a time. Decode retains at most two 4,096-sample Float32 channel vectors plus one encoded range buffer.
+Hashing is synchronous and uses at most one open file. Playback uses one bounded decode producer and retains one validated reader per routed track, for a maximum of five open WAV files. Inspection reads only the RIFF header, chunk headers, and `fmt ` bytes unless hash verification is requested. Hashing reads 64 KiB at a time. Each track decoder reuses two 4,096-sample Float32 channel vectors and one bounded encoded range buffer.
 
 The sparse-duration test compares a 4,096-frame bundle with a one-hour, 48 kHz bundle. Per-track inspection bytes are identical. A 4,096-frame PCM16 decode reads 16,384 bytes in both cases and returns 4,096 samples per channel.
 

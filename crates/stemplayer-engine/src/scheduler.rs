@@ -2,8 +2,11 @@ use crate::session::SessionSource;
 use crate::{PlaybackSession, SourceBlock, SynchronizedRing};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::thread;
 use stemplayer_decode::{
-    CompressedContainerTrack, CompressedDecodeDiagnostics, CompressedTrackDecoder, decode_window,
+    CompressedContainerTrack, CompressedDecodeDiagnostics, CompressedTrackDecoder,
+    StudioTrackDecoder,
 };
 use stemplayer_domain::{ErrorCode, PlayerError, StemRole, TrackRole};
 use stemplayer_format::StudioRole;
@@ -26,6 +29,7 @@ pub struct DecodeScheduler {
     metrics: DecodeMetrics,
     compressed_routes: Option<Vec<CompressedRoute>>,
     audio_decoder: Option<CompressedTrackDecoder>,
+    studio_decoders: Option<Vec<StudioTrackDecoder>>,
 }
 
 struct CompressedRoute {
@@ -65,6 +69,7 @@ impl DecodeScheduler {
             },
             compressed_routes: None,
             audio_decoder: None,
+            studio_decoders: None,
         }
     }
 
@@ -214,20 +219,29 @@ impl DecodeScheduler {
         start_frame: u64,
         frames: u32,
     ) -> Result<SourceBlock, PlayerError> {
-        let mut roles = Vec::with_capacity(5);
-        roles.extend(StudioRole::STEMS);
-        if session.metadata().has_master {
-            roles.push(StudioRole::Master);
+        if self.studio_decoders.is_none() {
+            let mut roles = Vec::with_capacity(5);
+            roles.extend(StudioRole::STEMS);
+            if session.metadata().has_master {
+                roles.push(StudioRole::Master);
+            }
+            self.studio_decoders = Some(
+                roles
+                    .into_iter()
+                    .map(|role| StudioTrackDecoder::open(bundle, role))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
         }
-        let mut windows = Vec::with_capacity(roles.len());
-        for role in roles {
+        let decoders = self.studio_decoders.as_mut().unwrap();
+        self.metrics.worker_count = u8::try_from(decoders.len()).unwrap();
+        for decoder in decoders.iter_mut() {
             if self.cancelled.load(Ordering::Acquire) {
                 return Err(PlayerError::new(
                     ErrorCode::BundleAborted,
                     "Decode generation was cancelled",
                 ));
             }
-            let window = decode_window(bundle, role, start_frame, frames, &self.cancelled)?;
+            let window = decoder.decode_window(start_frame, frames, &self.cancelled)?;
             if window.start_frame != start_frame || window.frames != frames {
                 return Err(PlayerError::new(
                     ErrorCode::BundleInconsistent,
@@ -235,17 +249,186 @@ impl DecodeScheduler {
                 ));
             }
             self.metrics.bytes_read = self.metrics.bytes_read.saturating_add(window.bytes_read);
-            windows.push(StereoWindow {
-                left: window.left,
-                right: window.right,
-            });
         }
-        interleave(session, start_frame, frames, &windows)
+        let channels = session.metadata().channel_count.get();
+        let mut samples = Vec::with_capacity(frames as usize * usize::from(channels));
+        for frame in 0..frames as usize {
+            for decoder in decoders.iter() {
+                let (left, right) = decoder.samples();
+                samples.push(left[frame]);
+                samples.push(right[frame]);
+            }
+        }
+        SourceBlock::new(session.generation(), start_frame, frames, channels, samples)
     }
 
     fn record_buffered(&mut self, frames: u64) {
         self.metrics.minimum_buffered_frames = self.metrics.minimum_buffered_frames.min(frames);
         self.metrics.maximum_buffered_frames = self.metrics.maximum_buffered_frames.max(frames);
+    }
+}
+
+pub(crate) struct DecodeProducer {
+    sender: SyncSender<DecodeRequest>,
+    receiver: Receiver<DecodeResult>,
+    cancelled: Arc<AtomicBool>,
+    pending_generation: Option<stemplayer_domain::GenerationId>,
+    metrics: DecodeMetrics,
+}
+
+struct DecodeRequest {
+    session: PlaybackSession,
+    start_frame: u64,
+    frames: u32,
+}
+
+struct DecodeResult {
+    generation: stemplayer_domain::GenerationId,
+    block: Result<SourceBlock, PlayerError>,
+    metrics: DecodeMetrics,
+}
+
+impl DecodeProducer {
+    pub fn new(cancelled: Arc<AtomicBool>) -> Result<Self, PlayerError> {
+        let (sender, requests) = sync_channel::<DecodeRequest>(1);
+        let (results, receiver) = sync_channel(1);
+        let worker_cancelled = Arc::clone(&cancelled);
+        thread::Builder::new()
+            .name("stemplayer-decode".to_owned())
+            .spawn(move || {
+                let mut scheduler = DecodeScheduler::with_cancellation(worker_cancelled);
+                while let Ok(request) = requests.recv() {
+                    let generation = request.session.generation();
+                    scheduler.metrics.pending_blocks = 1;
+                    scheduler.metrics.maximum_pending_blocks = 1;
+                    let block = scheduler.decode_block(
+                        &request.session,
+                        request.start_frame,
+                        request.frames,
+                    );
+                    scheduler.metrics.pending_blocks = 0;
+                    if let Ok(block) = &block {
+                        scheduler.metrics.decoded_frames = scheduler
+                            .metrics
+                            .decoded_frames
+                            .saturating_add(u64::from(block.frames));
+                    }
+                    if results
+                        .send(DecodeResult {
+                            generation,
+                            block,
+                            metrics: scheduler.metrics(),
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|source| {
+                PlayerError::new(ErrorCode::Internal, "Decode producer could not start")
+                    .with_source(source)
+            })?;
+        Ok(Self {
+            sender,
+            receiver,
+            cancelled,
+            pending_generation: None,
+            metrics: DecodeMetrics::default(),
+        })
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn fill_to(
+        &mut self,
+        session: &PlaybackSession,
+        ring: &mut SynchronizedRing,
+        target_frames: u64,
+    ) -> Result<(), PlayerError> {
+        self.poll(ring)?;
+        let target = target_frames.min(session.buffer_config().maximum_frames);
+        let end = session.metadata().end_frame_exclusive.get() as u64;
+        if let Some(generation) = self.pending_generation {
+            if generation != session.generation() {
+                self.cancelled.store(true, Ordering::Release);
+            }
+            return Ok(());
+        }
+        if ring.buffered_frames() >= target || ring.write_frame() >= end {
+            return Ok(());
+        }
+        let frames = u64::from(session.buffer_config().block_frames)
+            .min(target.saturating_sub(ring.buffered_frames()))
+            .min(ring.available_frames())
+            .min(end.saturating_sub(ring.write_frame()));
+        if frames == 0 {
+            return Ok(());
+        }
+        self.cancelled.store(false, Ordering::Release);
+        self.sender
+            .try_send(DecodeRequest {
+                session: session.clone(),
+                start_frame: ring.write_frame(),
+                frames: frames as u32,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => {
+                    PlayerError::new(ErrorCode::Internal, "Decode producer queue is full")
+                }
+                TrySendError::Disconnected(_) => {
+                    PlayerError::new(ErrorCode::Internal, "Decode producer terminated")
+                }
+            })?;
+        self.pending_generation = Some(session.generation());
+        self.metrics.pending_blocks = 1;
+        self.metrics.maximum_pending_blocks = 1;
+        Ok(())
+    }
+
+    pub fn metrics(&self) -> DecodeMetrics {
+        self.metrics
+    }
+
+    fn poll(&mut self, ring: &mut SynchronizedRing) -> Result<(), PlayerError> {
+        let result = match self.receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Disconnected) => {
+                return Err(PlayerError::new(
+                    ErrorCode::Internal,
+                    "Decode producer terminated",
+                ));
+            }
+        };
+        self.pending_generation = None;
+        let minimum = self.metrics.minimum_buffered_frames;
+        let maximum = self.metrics.maximum_buffered_frames;
+        self.metrics = result.metrics;
+        self.metrics.pending_blocks = 0;
+        self.metrics.maximum_pending_blocks = 1;
+        self.metrics.minimum_buffered_frames = minimum;
+        self.metrics.maximum_buffered_frames = maximum;
+        if result.generation != ring.generation() {
+            return Ok(());
+        }
+        let block = result.block?;
+        if ring.publish(block)? {
+            self.metrics.minimum_buffered_frames = if self.metrics.minimum_buffered_frames == 0 {
+                ring.buffered_frames()
+            } else {
+                self.metrics
+                    .minimum_buffered_frames
+                    .min(ring.buffered_frames())
+            };
+            self.metrics.maximum_buffered_frames = self
+                .metrics
+                .maximum_buffered_frames
+                .max(ring.buffered_frames());
+        }
+        Ok(())
     }
 }
 

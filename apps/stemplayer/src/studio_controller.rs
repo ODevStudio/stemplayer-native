@@ -1,7 +1,9 @@
 mod analysis;
+mod cache_writer;
 mod hls;
 
 use analysis::AnalysisWork;
+use cache_writer::CacheWriter;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
@@ -15,7 +17,9 @@ use stemplayer_domain::{
 };
 use stemplayer_engine::{PlaybackEngine, PlaybackSession};
 use stemplayer_format::StudioBundle;
-use stemplayer_output::{DeviceOutput, PostMixResampler, StereoFrame};
+use stemplayer_output::{
+    DeviceLifecycle, DeviceOutput, LifecycleAction, PostMixResampler, StereoFrame,
+};
 use stemplayer_timeline::{frames_to_microseconds, microseconds_to_frames};
 use stemplayer_waveform::{
     CacheStatus, SourceEvidence, SourceFingerprint, WaveformCache, WaveformSnapshot,
@@ -28,6 +32,7 @@ const ACTIVE_TICK: Duration = Duration::from_millis(25);
 const IDLE_TICK: Duration = Duration::from_secs(60);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
 const CLEAR_TIMEOUT: Duration = Duration::from_millis(500);
+const OUTPUT_REOPEN_ATTEMPTS: u8 = 3;
 const MAX_PLAYLIST_ITEMS: usize = 512;
 const PLAYLIST_PROGRESS_HIDDEN: u8 = 101;
 
@@ -219,11 +224,14 @@ struct WorkerState {
     engine: Option<PlaybackEngine>,
     analysis: Option<AnalysisWork>,
     cache: Option<Arc<WaveformCache>>,
+    cache_writer: Option<CacheWriter>,
     cache_enabled: bool,
     fingerprint: Option<SourceFingerprint>,
     hls: Option<Arc<stemplayer_network::HlsPlaybackSource>>,
     output: Option<DeviceOutput>,
     resampler: Option<PostMixResampler>,
+    output_lifecycle: DeviceLifecycle,
+    output_reopen_at: Option<Instant>,
     selected_device: Option<String>,
     generation: GenerationId,
     current_source: Option<PathBuf>,
@@ -304,15 +312,21 @@ impl PlaylistAnalysis {
 
 impl WorkerState {
     fn new(cache: Option<Arc<WaveformCache>>, cache_enabled: bool) -> Self {
+        let cache_writer = cache
+            .as_ref()
+            .map(|cache| CacheWriter::new(Arc::clone(cache)));
         Self {
             engine: None,
             analysis: None,
             cache,
+            cache_writer,
             cache_enabled,
             fingerprint: None,
             hls: None,
             output: None,
             resampler: None,
+            output_lifecycle: DeviceLifecycle::new(OUTPUT_REOPEN_ATTEMPTS),
+            output_reopen_at: None,
             selected_device: None,
             generation: GenerationId::INITIAL,
             current_source: None,
@@ -373,7 +387,6 @@ impl WorkerState {
                     self.reset_resampler(false)?;
                 }
                 self.pump()?;
-                self.output_mut()?.play()?;
                 self.publish(shared)
             }
             PlayerCommand::Pause => {
@@ -437,8 +450,10 @@ impl WorkerState {
                 Ok(())
             }
             PlayerCommand::Cache(CacheCommand::ClearCurrent) => {
-                if let (Some(cache), Some(fingerprint)) = (&self.cache, self.fingerprint) {
-                    cache.clear_current(fingerprint)?;
+                if let (Some(writer), Some(fingerprint)) =
+                    (self.cache_writer.as_mut(), self.fingerprint)
+                {
+                    writer.clear_current(fingerprint)?;
                 }
                 if let Some(source) = self.current_source.as_deref()
                     && let Some(index) = self
@@ -453,9 +468,9 @@ impl WorkerState {
                 Ok(())
             }
             PlayerCommand::Cache(CacheCommand::ClearAll) => {
-                self.cache
-                    .as_ref()
-                    .map_or(Ok(()), |cache| cache.clear_all())?;
+                if let Some(writer) = self.cache_writer.as_mut() {
+                    writer.clear_all()?;
+                }
                 self.playlist_analysis.reset();
                 self.refresh_playlist_progress(shared);
                 Ok(())
@@ -467,9 +482,9 @@ impl WorkerState {
                 self.publish(shared)
             }
             PlayerCommand::Cache(CacheCommand::SetCapacityBytes(capacity_bytes)) => self
-                .cache
-                .as_ref()
-                .map_or(Ok(()), |cache| cache.set_capacity_bytes(capacity_bytes)),
+                .cache_writer
+                .as_mut()
+                .map_or(Ok(()), |writer| writer.set_capacity(capacity_bytes)),
             PlayerCommand::Cancel(_) => Ok(()),
             PlayerCommand::Shutdown => Ok(()),
         }
@@ -559,7 +574,6 @@ impl WorkerState {
         {
             self.ensure_output()?;
             self.pump()?;
-            self.output_mut()?.play()?;
         }
         self.publish(shared)
     }
@@ -596,6 +610,8 @@ impl WorkerState {
     }
 
     fn close_output(&mut self) -> Result<(), PlayerError> {
+        self.output_reopen_at = None;
+        self.output_lifecycle.stop();
         self.resampler = None;
         if let Some(mut output) = self.output.take() {
             output.pause()?;
@@ -603,28 +619,79 @@ impl WorkerState {
         Ok(())
     }
 
-    fn engine_mut(&mut self) -> Result<&mut PlaybackEngine, PlayerError> {
-        self.engine.as_mut().ok_or_else(not_ready)
+    fn maintain_output(&mut self, shared: &Shared) -> Result<(), PlayerError> {
+        if self
+            .output
+            .as_ref()
+            .is_some_and(|output| output.stream_errors() > 0)
+        {
+            let audible = self.audible_position();
+            if self
+                .engine
+                .as_ref()
+                .is_some_and(|engine| engine.state() == TransportState::Playing)
+            {
+                self.engine_mut()?.pause()?;
+            }
+            self.output = None;
+            self.resampler = None;
+            self.output_lifecycle.device_lost();
+            self.schedule_output_reopen()?;
+            if let Some(frame) = audible {
+                self.engine_mut()?.seek(frame)?;
+            }
+            return self.publish(shared);
+        }
+        if self
+            .output_reopen_at
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.output_reopen_at = None;
+            match self.ensure_output() {
+                Ok(()) => {
+                    self.output_lifecycle.reopened();
+                    self.publish(shared)?;
+                }
+                Err(_) => self.schedule_output_reopen()?,
+            }
+        }
+        Ok(())
     }
 
-    fn output_mut(&mut self) -> Result<&mut DeviceOutput, PlayerError> {
-        self.output.as_mut().ok_or_else(not_ready)
+    fn schedule_output_reopen(&mut self) -> Result<(), PlayerError> {
+        match self.output_lifecycle.retry_reopen() {
+            LifecycleAction::ReopenAfter(delay) => {
+                self.output_reopen_at = Some(Instant::now() + delay);
+                Ok(())
+            }
+            LifecycleAction::ReportRecoverableError => Err(PlayerError::new(
+                ErrorCode::PlaybackNotReady,
+                "Audio output device could not be recovered",
+            )
+            .with_user_action("Choose an available audio output device")),
+            _ => Ok(()),
+        }
+    }
+
+    fn engine_mut(&mut self) -> Result<&mut PlaybackEngine, PlayerError> {
+        self.engine.as_mut().ok_or_else(not_ready)
     }
 
     fn pump(&mut self) -> Result<(), PlayerError> {
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
+        engine.refill()?;
+        if engine.state() != TransportState::Playing {
+            return Ok(());
+        }
         let Some(output) = self.output.as_mut() else {
             return Ok(());
         };
         let Some(resampler) = self.resampler.as_mut() else {
             return Ok(());
         };
-        if engine.state() != TransportState::Playing {
-            return Ok(());
-        }
-        engine.refill()?;
+        let starting = !output.is_active();
         let underflows = output.metrics().underflows;
         let recovering = underflows > self.last_output_underflows && !engine.source_exhausted();
         self.last_output_underflows = underflows;
@@ -647,6 +714,9 @@ impl WorkerState {
             } else {
                 engine.render(&mut rendered[..needed])?
             };
+            if produced == 0 && !engine.source_exhausted() {
+                break;
+            }
             let converted = resampler.process(&rendered[..produced], engine.source_exhausted())?;
             let converted_len = converted.len();
             if output.push(converted) != converted_len {
@@ -667,7 +737,7 @@ impl WorkerState {
         }
         if resampler.finished() && engine.finish_if_output_drained(output.queued_frames())? {
             output.pause()?;
-        } else if recovering {
+        } else if recovering || starting {
             output.play()?;
         }
         Ok(())
@@ -681,10 +751,9 @@ impl WorkerState {
         if let Some((snapshot, complete)) = update {
             if complete
                 && self.cache_enabled
-                && let Some(cache) = self.cache.as_ref().map(Arc::clone)
+                && let Some(writer) = self.cache_writer.as_mut()
             {
-                let cached = snapshot.clone();
-                thread::spawn(move || drop(cache.write(&cached)));
+                writer.write(snapshot.clone())?;
             }
             *shared
                 .waveform
@@ -707,15 +776,15 @@ impl WorkerState {
                 .as_ref()
                 .is_none_or(|engine| engine.state() != TransportState::Playing)
         {
-            self.analyze_playlist(shared);
+            self.analyze_playlist(shared)?;
         }
         Ok(())
     }
 
-    fn analyze_playlist(&mut self, shared: &Shared) {
+    fn analyze_playlist(&mut self, shared: &Shared) -> Result<(), PlayerError> {
         if !self.cache_enabled || self.cache.is_none() || !self.playlist_analysis.pending() {
             self.refresh_playlist_progress(shared);
-            return;
+            return Ok(());
         }
         if let Some(active) = self.playlist_analysis.active.as_mut() {
             match active.analysis.step(&active.engine) {
@@ -723,8 +792,8 @@ impl WorkerState {
                     active.progress = snapshot.progress;
                     if complete {
                         let index = active.index;
-                        if let Some(cache) = &self.cache {
-                            let _ = cache.write(&snapshot);
+                        if let Some(writer) = self.cache_writer.as_mut() {
+                            writer.write(snapshot)?;
                         }
                         self.playlist_analysis.completed[index] = true;
                         self.playlist_analysis.active = None;
@@ -738,11 +807,11 @@ impl WorkerState {
                 }
             }
             self.refresh_playlist_progress(shared);
-            return;
+            return Ok(());
         }
         let Some(index) = self.playlist_analysis.next() else {
             self.refresh_playlist_progress(shared);
-            return;
+            return Ok(());
         };
         let source = self.playlist_analysis.sources[index].clone();
         let item: Result<Option<PlaylistAnalysisItem>, PlayerError> = (|| {
@@ -782,10 +851,25 @@ impl WorkerState {
             Ok(None) | Err(_) => self.playlist_analysis.completed[index] = true,
         }
         self.refresh_playlist_progress(shared);
+        Ok(())
     }
 
     fn playlist_work_pending(&self) -> bool {
         self.cache_enabled && self.cache.is_some() && self.playlist_analysis.pending()
+    }
+
+    fn cache_write_pending(&self) -> bool {
+        self.cache_writer.as_ref().is_some_and(CacheWriter::pending)
+    }
+
+    fn poll_cache_writer(&mut self) -> Result<(), PlayerError> {
+        self.cache_writer.as_mut().map_or(Ok(()), CacheWriter::poll)
+    }
+
+    fn shutdown_cache_writer(&mut self) -> Result<(), PlayerError> {
+        self.cache_writer
+            .as_mut()
+            .map_or(Ok(()), CacheWriter::shutdown)
     }
 
     fn refresh_playlist_progress(&self, shared: &Shared) {
@@ -958,10 +1042,12 @@ impl WorkerState {
         device: Option<String>,
         shared: &Shared,
     ) -> Result<(), PlayerError> {
-        let resume = self
-            .engine
-            .as_ref()
-            .is_some_and(|engine| engine.state() == TransportState::Playing);
+        let resume = self.engine.as_ref().is_some_and(|engine| {
+            matches!(
+                engine.state(),
+                TransportState::Priming | TransportState::Playing
+            )
+        });
         let audible = self.audible_position();
         self.close_output()?;
         self.selected_device = device;
@@ -973,7 +1059,6 @@ impl WorkerState {
             self.reset_resampler(true)?;
             if resume {
                 self.pump()?;
-                self.output_mut()?.play()?;
             }
         }
         self.publish(shared)
@@ -1053,17 +1138,25 @@ fn worker_loop(
 ) {
     let mut state = WorkerState::new(cache, cache_enabled);
     while !shared.shutdown.load(Ordering::Acquire) {
-        let playing = state
-            .engine
-            .as_ref()
-            .is_some_and(|engine| engine.state() == TransportState::Playing);
+        let playing = state.engine.as_ref().is_some_and(|engine| {
+            matches!(
+                engine.state(),
+                TransportState::Priming | TransportState::Playing
+            )
+        });
         let timeout = if playing {
             ACTIVE_TICK
-        } else if state.analysis.is_some() || state.playlist_work_pending() {
+        } else if state.analysis.is_some()
+            || state.playlist_work_pending()
+            || state.cache_write_pending()
+        {
             Duration::ZERO
         } else {
             IDLE_TICK
         };
+        let timeout = state.output_reopen_at.map_or(timeout, |deadline| {
+            timeout.min(deadline.saturating_duration_since(Instant::now()))
+        });
         match receiver.recv_timeout(timeout) {
             Ok(queued) => {
                 let stale = {
@@ -1091,21 +1184,34 @@ fn worker_loop(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        if let Err(error) = state
-            .pump()
+        let previous_state = state.engine.as_ref().map(PlaybackEngine::state);
+        let tick = state
+            .poll_cache_writer()
+            .and_then(|()| state.maintain_output(&shared))
+            .and_then(|()| state.pump())
             .and_then(|()| state.analyze(&shared))
-            .and_then(|()| state.publish_if_due(&shared))
-            && should_publish_error(&error, shared.cancel.load(Ordering::Acquire))
+            .and_then(|()| state.publish_if_due(&shared));
+        if let Err(error) = tick {
+            if should_publish_error(&error, shared.cancel.load(Ordering::Acquire)) {
+                publish_error(&shared, &state, error);
+            }
+        } else if previous_state != state.engine.as_ref().map(PlaybackEngine::state)
+            && let Err(error) = state.publish(&shared)
         {
             publish_error(&shared, &state, error);
         }
     }
     let _ = state.close_output();
-    publish(
-        &shared,
+    let cache_error = state.shutdown_cache_writer().err();
+    let mut snapshot =
         PlayerSnapshot::new(TransportState::Closed, state.generation, None, None, vec![])
-            .unwrap_or_else(|_| PlayerSnapshot::empty(TransportState::Closed)),
-    );
+            .unwrap_or_else(|_| PlayerSnapshot::empty(TransportState::Closed));
+    if let Some(error) = cache_error {
+        let mut details = snapshot.details().clone();
+        details.error = Some(error);
+        snapshot = snapshot.with_details(details);
+    }
+    publish(&shared, snapshot);
 }
 
 fn waveform_cache_state(status: CacheStatus) -> WaveformCacheState {

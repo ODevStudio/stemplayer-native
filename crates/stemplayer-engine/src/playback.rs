@@ -1,4 +1,5 @@
-use crate::{AnalysisDecoder, DecodeScheduler, PlaybackSession, RingMetrics, SynchronizedRing};
+use crate::scheduler::DecodeProducer;
+use crate::{AnalysisDecoder, PlaybackSession, RingMetrics, SynchronizedRing};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -14,16 +15,18 @@ use stemplayer_timeline::frames_to_microseconds;
 pub struct PlaybackEngine {
     session: PlaybackSession,
     ring: SynchronizedRing,
-    scheduler: DecodeScheduler,
+    producer: DecodeProducer,
     mixer: MixerRenderer,
     transport: TransportMachine,
     position: u64,
     underruns: u64,
     source_exhausted: bool,
     resume_after_seek: bool,
+    play_after_priming: bool,
     last_seek_packets: u32,
     last_seek_discarded_frames: u64,
     last_seek_latency_us: u64,
+    pending_seek: Option<(Instant, crate::DecodeMetrics)>,
 }
 
 impl PlaybackEngine {
@@ -54,16 +57,18 @@ impl PlaybackEngine {
         Ok(Self {
             session,
             ring,
-            scheduler: DecodeScheduler::with_cancellation(cancellation),
+            producer: DecodeProducer::new(cancellation)?,
             mixer,
             transport,
             position: start_frame,
             underruns: 0,
             source_exhausted: false,
             resume_after_seek: false,
+            play_after_priming: false,
             last_seek_packets: 0,
             last_seek_discarded_frames: 0,
             last_seek_latency_us: 0,
+            pending_seek: None,
         })
     }
 
@@ -71,21 +76,22 @@ impl PlaybackEngine {
         if self.transport.state() == TransportState::Ended {
             self.reset_generation(self.session.metadata().start_frame.get().max(0) as u64)?;
         }
-        self.transport.transition(TransportState::Priming)?;
-        self.scheduler.fill_to(
-            &self.session,
-            &mut self.ring,
-            self.session.buffer_config().start_frames,
-        )?;
-        self.transport.transition(TransportState::Playing)
+        self.play_after_priming = true;
+        if self.transport.state() != TransportState::Priming {
+            self.transport.transition(TransportState::Priming)?;
+        }
+        self.refill()
     }
 
     pub fn pause(&mut self) -> Result<(), PlayerError> {
+        self.play_after_priming = false;
         self.transport.transition(TransportState::Paused)
     }
 
     pub fn stop(&mut self) -> Result<(), PlayerError> {
-        self.scheduler.cancel();
+        self.producer.cancel();
+        self.pending_seek = None;
+        self.play_after_priming = false;
         self.reset_generation(self.session.metadata().start_frame.get().max(0) as u64)?;
         if self.transport.state() != TransportState::Ready {
             self.transport.transition(TransportState::Ready)?;
@@ -95,7 +101,7 @@ impl PlaybackEngine {
 
     pub fn seek(&mut self, frame: SourceFrame) -> Result<SourceFrame, PlayerError> {
         let started = Instant::now();
-        let before = self.scheduler.metrics();
+        let before = self.producer.metrics();
         let resume = if self.transport.state() == TransportState::Seeking {
             self.resume_after_seek
         } else {
@@ -111,49 +117,31 @@ impl PlaybackEngine {
         let end = self.session.metadata().end_frame_exclusive.get() as u64;
         let target = frame.get().max(0) as u64;
         let target = target.min(end);
-        self.scheduler.cancel();
+        self.producer.cancel();
         self.reset_generation(target)?;
         if target == end {
             self.transport.transition(TransportState::Ended)?;
+            self.pending_seek = None;
+            self.play_after_priming = false;
+            self.last_seek_packets = 0;
+            self.last_seek_discarded_frames = 0;
+            self.last_seek_latency_us =
+                started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         } else {
-            self.scheduler.fill_to(
-                &self.session,
-                &mut self.ring,
-                self.session.buffer_config().start_frames,
-            )?;
-            self.transport.transition(if resume {
-                TransportState::Playing
-            } else {
-                TransportState::Paused
-            })?;
+            self.play_after_priming = resume;
+            self.transport.transition(TransportState::Priming)?;
+            self.pending_seek = Some((started, before));
+            self.refill()?;
         }
         self.resume_after_seek = false;
-        let after = self.scheduler.metrics();
-        self.last_seek_packets = u32::try_from(
-            after
-                .packets_decoded
-                .saturating_sub(before.packets_decoded)
-                .min(u64::from(u32::MAX)),
-        )
-        .unwrap();
-        self.last_seek_discarded_frames = after
-            .discarded_frames
-            .saturating_sub(before.discarded_frames);
-        self.last_seek_latency_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         Ok(SourceFrame::new(target as i64))
     }
 
     pub fn render(&mut self, output: &mut [StereoFrame]) -> Result<usize, PlayerError> {
         output.fill(StereoFrame::default());
+        self.refill()?;
         if self.transport.state() != TransportState::Playing {
             return Ok(0);
-        }
-        if self.ring.buffered_frames() == 0 && self.position < end_frame(&self.session) {
-            self.scheduler.fill_to(
-                &self.session,
-                &mut self.ring,
-                self.session.buffer_config().start_frames,
-            )?;
         }
         let channels = usize::from(self.session.metadata().channel_count.get());
         let mut source = [0.0_f32; 10];
@@ -183,17 +171,49 @@ impl PlaybackEngine {
     }
 
     pub fn refill(&mut self) -> Result<(), PlayerError> {
-        if self.transport.state() != TransportState::Playing {
+        if !matches!(
+            self.transport.state(),
+            TransportState::Priming | TransportState::Playing
+        ) {
             return Ok(());
         }
         let config = self.session.buffer_config();
         let buffered = self.ring.buffered_frames();
-        if buffered < config.target_frames && self.position < end_frame(&self.session) {
-            self.scheduler.fill_to(
-                &self.session,
-                &mut self.ring,
-                buffered.saturating_add(u64::from(config.block_frames)),
-            )?;
+        let target = if self.transport.state() == TransportState::Priming {
+            config
+                .start_frames
+                .min(end_frame(&self.session).saturating_sub(self.position))
+        } else if buffered < config.target_frames {
+            buffered.saturating_add(u64::from(config.block_frames))
+        } else {
+            buffered
+        };
+        self.producer
+            .fill_to(&self.session, &mut self.ring, target)?;
+        if self.transport.state() == TransportState::Priming
+            && (self.ring.buffered_frames() >= target
+                || self.ring.write_frame() == end_frame(&self.session))
+        {
+            self.transport.transition(if self.play_after_priming {
+                TransportState::Playing
+            } else {
+                TransportState::Paused
+            })?;
+            if let Some((started, before)) = self.pending_seek.take() {
+                let after = self.producer.metrics();
+                self.last_seek_packets = u32::try_from(
+                    after
+                        .packets_decoded
+                        .saturating_sub(before.packets_decoded)
+                        .min(u64::from(u32::MAX)),
+                )
+                .unwrap();
+                self.last_seek_discarded_frames = after
+                    .discarded_frames
+                    .saturating_sub(before.discarded_frames);
+                self.last_seek_latency_us =
+                    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+            }
         }
         Ok(())
     }
@@ -296,7 +316,7 @@ impl PlaybackEngine {
     }
 
     pub fn decode_metrics(&self) -> crate::DecodeMetrics {
-        self.scheduler.metrics()
+        self.producer.metrics()
     }
 
     pub const fn ring_metrics(&self) -> RingMetrics {
@@ -309,7 +329,10 @@ impl PlaybackEngine {
 
     pub fn playback_pressure(&self) -> (bool, u64, u64) {
         (
-            self.transport.state() == TransportState::Playing,
+            matches!(
+                self.transport.state(),
+                TransportState::Priming | TransportState::Playing
+            ),
             self.ring.buffered_frames(),
             self.session.buffer_config().low_frames,
         )
@@ -341,7 +364,7 @@ impl PlaybackEngine {
             })
             .collect::<Vec<_>>()
             .join("; ");
-        let metrics = self.scheduler.metrics();
+        let metrics = self.producer.metrics();
         Some(SourceDiagnostics {
             container: BoundedText::new("mp4").unwrap(),
             tracks: BoundedText::truncated(tracks),
@@ -374,6 +397,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
     use stemplayer_format::{SelectedFile, SourceGroup, StudioBundle};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
@@ -464,10 +488,21 @@ mod tests {
         (PlaybackEngine::new(session).unwrap(), fixture)
     }
 
+    fn play(engine: &mut PlaybackEngine) {
+        engine.play().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while engine.state() == TransportState::Priming {
+            engine.refill().unwrap();
+            assert!(Instant::now() < deadline, "decode producer timed out");
+            std::thread::yield_now();
+        }
+        assert_eq!(engine.state(), TransportState::Playing);
+    }
+
     #[test]
     fn playback_reaches_the_exact_last_frame_once() {
         let (mut engine, _fixture) = engine(true);
-        engine.play().unwrap();
+        play(&mut engine);
         let mut output = [StereoFrame::default(); 16];
         engine.render(&mut output).unwrap();
         assert_eq!(engine.position(), SourceFrame::new(8));
@@ -485,7 +520,7 @@ mod tests {
     #[test]
     fn stop_and_seek_storms_replace_the_generation() {
         let (mut engine, _fixture) = engine(false);
-        engine.play().unwrap();
+        play(&mut engine);
         let initial = engine.generation();
         for frame in 0..500 {
             engine.seek(SourceFrame::new((frame % 9) as i64)).unwrap();
@@ -500,27 +535,31 @@ mod tests {
     #[test]
     fn interrupted_seek_retargets_without_losing_playback_state() {
         let (mut engine, _fixture) = engine(false);
-        engine.play().unwrap();
+        play(&mut engine);
         engine.resume_after_seek = true;
         engine
             .transport
             .transition(TransportState::Seeking)
             .unwrap();
         engine.seek(SourceFrame::new(5)).unwrap();
+        while engine.state() == TransportState::Priming {
+            engine.refill().unwrap();
+            std::thread::yield_now();
+        }
         assert_eq!(engine.state(), TransportState::Playing);
     }
 
     #[test]
     fn pause_preserves_the_frame_and_resume_continues() {
         let (mut engine, _fixture) = engine(false);
-        engine.play().unwrap();
+        play(&mut engine);
         let mut output = [StereoFrame::default(); 3];
         engine.render(&mut output).unwrap();
         engine.pause().unwrap();
         let paused = engine.position();
         engine.render(&mut output).unwrap();
         assert_eq!(engine.position(), paused);
-        engine.play().unwrap();
+        play(&mut engine);
         engine.render(&mut output).unwrap();
         assert_eq!(engine.position(), SourceFrame::new(6));
     }
@@ -528,7 +567,7 @@ mod tests {
     #[test]
     fn mixer_automation_never_changes_transport_or_source_generation() {
         let (mut engine, _fixture) = engine(true);
-        engine.play().unwrap();
+        play(&mut engine);
         let mut output = [StereoFrame::default(); 2];
         engine.render(&mut output).unwrap();
         let generation = engine.generation();
@@ -551,7 +590,7 @@ mod tests {
     fn seek_primes_active_automation_and_last_frame_commands_stay_bounded() {
         let (mut engine, _fixture) = engine(false);
         engine.set_gain(StemRole::Drums, GainDb::SILENCE);
-        engine.play().unwrap();
+        play(&mut engine);
         let mut output = [StereoFrame::default(); 2];
         engine.render(&mut output).unwrap();
         assert!(
@@ -564,6 +603,10 @@ mod tests {
                 > 0
         );
         engine.seek(SourceFrame::new(7)).unwrap();
+        while engine.state() == TransportState::Priming {
+            engine.refill().unwrap();
+            std::thread::yield_now();
+        }
         let mixer = engine.snapshot().unwrap().details().mixer;
         assert_eq!(mixer.current_linear_gains[0], 0.0);
         assert_eq!(mixer.remaining_gain_frames[0], 0);
@@ -572,5 +615,64 @@ mod tests {
         assert_eq!(rendered, 1);
         assert!(output[0].left.is_finite());
         assert!(engine.source_exhausted());
+    }
+
+    struct BlockingSource {
+        started: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl crate::ExternalSource for BlockingSource {
+        fn decode_block(
+            &self,
+            _generation: GenerationId,
+            _start_frame: u64,
+            _frames: u32,
+            cancelled: &AtomicBool,
+        ) -> Result<crate::SourceBlock, PlayerError> {
+            self.started.store(true, Ordering::Release);
+            while !cancelled.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            while !self.release.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(PlayerError::new(
+                stemplayer_domain::ErrorCode::BundleAborted,
+                "cancelled",
+            ))
+        }
+    }
+
+    #[test]
+    fn blocking_decode_does_not_block_stop() {
+        let started = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let session = PlaybackSession::new_external(
+            "blocking",
+            48_000,
+            48_000,
+            false,
+            GenerationId::INITIAL,
+            Arc::new(BlockingSource {
+                started: Arc::clone(&started),
+                release: Arc::clone(&release),
+            }),
+        )
+        .unwrap();
+        let mut engine =
+            PlaybackEngine::with_cancellation(session, Arc::clone(&cancelled)).unwrap();
+        engine.play().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !started.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "decode producer did not start");
+            std::thread::yield_now();
+        }
+        engine.stop().unwrap();
+        assert_eq!(engine.state(), TransportState::Ready);
+        engine.play().unwrap();
+        assert!(cancelled.load(Ordering::Acquire));
+        release.store(true, Ordering::Release);
     }
 }

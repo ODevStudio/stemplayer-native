@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use stemplayer_decode::decode_window;
+use stemplayer_decode::{StudioTrackDecoder, decode_window};
 use stemplayer_domain::ErrorCode;
 use stemplayer_format::{SelectedFile, SourceGroup, StudioBundle, StudioRole};
 
@@ -91,6 +91,31 @@ fn inspection_and_decode_reads_do_not_scale_with_duration() {
             .err()
             .unwrap()
             .code,
+        ErrorCode::BundleInconsistent
+    );
+}
+
+#[test]
+fn studio_decoder_reuses_reader_across_bounded_windows() {
+    let source = sparse_bundle(8192);
+    let cancelled = AtomicBool::new(false);
+    let bundle = StudioBundle::inspect(selected(&source.0), false, &cancelled).unwrap();
+    let mut decoder = StudioTrackDecoder::open(&bundle, StudioRole::Drums).unwrap();
+    let first = decoder.decode_window(0, 4096, &cancelled).unwrap();
+    assert_eq!(first.left.len(), 4096);
+    assert_eq!(first.bytes_read, 4096 * 4);
+    let adjacent = decoder.decode_window(4096, 4096, &cancelled).unwrap();
+    assert_eq!(adjacent.start_frame, 4096);
+    assert_eq!(adjacent.bytes_read, 4096 * 4);
+
+    OpenOptions::new()
+        .append(true)
+        .open(source.0.join("drums.wav"))
+        .unwrap()
+        .write_all(&[0])
+        .unwrap();
+    assert_eq!(
+        decoder.decode_window(0, 1, &cancelled).err().unwrap().code,
         ErrorCode::BundleInconsistent
     );
 }
