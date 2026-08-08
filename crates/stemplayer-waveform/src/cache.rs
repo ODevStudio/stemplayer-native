@@ -84,16 +84,15 @@ impl WaveformCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.path(fingerprint);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) if bytes.len() as u64 <= MAX_RECORD_BYTES => bytes,
-            Ok(_) => {
-                let _ = fs::remove_file(path);
-                return result(CacheStatus::Error);
-            }
+        let bytes = match read_record(&path) {
+            Ok(bytes) => bytes,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return result(CacheStatus::Miss);
             }
-            Err(_) => return result(CacheStatus::Error),
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                return result(CacheStatus::Error);
+            }
         };
         match decode(&bytes, fingerprint, generation) {
             Ok(snapshot) => {
@@ -154,7 +153,7 @@ impl WaveformCache {
             file.write_all(&bytes)
                 .and_then(|_| file.sync_all())
                 .map_err(|source| io_error("Waveform cache record cannot be flushed", source))?;
-            let verified = fs::read(&temporary)
+            let verified = read_record(&temporary)
                 .map_err(|source| io_error("Waveform cache record cannot be validated", source))?;
             decode(&verified, snapshot.fingerprint, snapshot.generation)?;
             fs::rename(&temporary, &final_path)
@@ -240,6 +239,31 @@ struct Entry {
     path: PathBuf,
     bytes: u64,
     modified: SystemTime,
+}
+
+fn read_record(path: &Path) -> std::io::Result<Vec<u8>> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "waveform cache record is not a bounded regular file",
+        )
+    };
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES
+    {
+        return Err(invalid());
+    }
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(invalid());
+    }
+    Ok(bytes)
 }
 
 fn entries(root: &Path) -> Result<Vec<Entry>, PlayerError> {
@@ -622,6 +646,25 @@ mod tests {
             CacheStatus::Miss
         );
         cache.clear_all().unwrap();
+    }
+
+    #[test]
+    fn record_reader_rejects_oversized_and_non_regular_files() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("record.spwf");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_RECORD_BYTES + 1).unwrap();
+        drop(file);
+        assert_eq!(
+            read_record(&path).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            read_record(&path).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
     }
 
     #[test]

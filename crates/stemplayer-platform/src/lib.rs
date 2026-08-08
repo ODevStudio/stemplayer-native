@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use stemplayer_domain::{DeviceId, ErrorCode, PlayerError};
 use stemplayer_format::{SelectedFile, SourceGroup};
@@ -191,12 +191,40 @@ impl SettingsLoad {
     }
 }
 
-pub fn load_settings(path: &Path) -> SettingsLoad {
-    if fs::metadata(path).is_ok_and(|metadata| metadata.len() > MAX_SETTINGS_BYTES) {
-        return SettingsLoad::Recovered(LocalSettings::default());
+fn read_settings(path: &Path) -> std::io::Result<Vec<u8>> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "settings are not a bounded regular file",
+        )
+    };
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_SETTINGS_BYTES
+    {
+        return Err(invalid());
     }
-    let Ok(bytes) = fs::read(path) else {
-        return SettingsLoad::Missing(LocalSettings::default());
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_SETTINGS_BYTES {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err(invalid());
+    }
+    Ok(bytes)
+}
+
+pub fn load_settings(path: &Path) -> SettingsLoad {
+    let bytes = match read_settings(path) {
+        Ok(bytes) => bytes,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return SettingsLoad::Missing(LocalSettings::default());
+        }
+        Err(_) => return SettingsLoad::Recovered(LocalSettings::default()),
     };
     match serde_json::from_slice::<LocalSettings>(&bytes) {
         Ok(settings)
@@ -536,6 +564,27 @@ mod tests {
         .unwrap();
         assert!(matches!(load_settings(&valid), SettingsLoad::Loaded(_)));
         fs::remove_file(valid).unwrap();
+    }
+
+    #[test]
+    fn settings_reader_rejects_oversized_and_non_regular_files() {
+        let oversized = test_path("oversized-settings");
+        let file = fs::File::create(&oversized).unwrap();
+        file.set_len(MAX_SETTINGS_BYTES + 1).unwrap();
+        drop(file);
+        assert_eq!(
+            read_settings(&oversized).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        fs::remove_file(oversized).unwrap();
+
+        let directory = test_path("settings-directory");
+        fs::create_dir(&directory).unwrap();
+        assert!(matches!(
+            load_settings(&directory),
+            SettingsLoad::Recovered(_)
+        ));
+        fs::remove_dir(directory).unwrap();
     }
 
     #[test]

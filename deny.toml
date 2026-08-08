@@ -4,6 +4,7 @@ all-features = true
 [advisories]
 version = 2
 unmaintained = "all"
+unsound = "all"
 yanked = "deny"
 ignore = [
     "RUSTSEC-2026-0194",
