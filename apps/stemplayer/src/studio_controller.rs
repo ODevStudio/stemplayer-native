@@ -1187,20 +1187,7 @@ fn worker_loop(
         });
         match receiver.recv_timeout(timeout) {
             Ok(queued) => {
-                let stale = {
-                    let _admission = shared
-                        .command_admission
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let stale = shared.shutdown.load(Ordering::Acquire)
-                        || (queued.epoch < shared.epoch.load(Ordering::Acquire)
-                            && matches!(&queued.command, WorkerCommand::Player(_)));
-                    if !stale {
-                        shared.cancel.store(false, Ordering::Release);
-                    }
-                    stale
-                };
-                if stale {
+                if !should_process_command(&queued, &shared) {
                     continue;
                 }
                 if let Err(error) = state.handle(queued.command, &shared)
@@ -1240,6 +1227,20 @@ fn worker_loop(
         snapshot = snapshot.with_details(details);
     }
     publish(&shared, snapshot);
+}
+
+fn should_process_command(queued: &QueuedCommand, shared: &Shared) -> bool {
+    let _admission = shared
+        .command_admission
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let current_epoch = shared.epoch.load(Ordering::Acquire);
+    let stale = shared.shutdown.load(Ordering::Acquire)
+        || (queued.epoch < current_epoch && matches!(&queued.command, WorkerCommand::Player(_)));
+    if !stale && queued.epoch == current_epoch {
+        shared.cancel.store(false, Ordering::Release);
+    }
+    !stale
 }
 
 fn waveform_cache_state(status: CacheStatus) -> WaveformCacheState {

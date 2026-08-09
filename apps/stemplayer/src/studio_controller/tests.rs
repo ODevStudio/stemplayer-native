@@ -120,6 +120,32 @@ fn failed_invalidating_admission_does_not_cancel_or_advance_epoch() {
 }
 
 #[test]
+fn older_playlist_command_preserves_newer_cancellation() {
+    let (sender, receiver) = sync_channel(COMMAND_CAPACITY);
+    let shared = Arc::new(Shared {
+        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
+        waveform: RwLock::new(None),
+        subscribers: Mutex::new(Vec::new()),
+        command_admission: Mutex::new(()),
+        cancel: Arc::new(AtomicBool::new(true)),
+        epoch: AtomicU64::new(1),
+        shutdown: AtomicBool::new(false),
+        playlist_cache_progress: AtomicU8::new(PLAYLIST_PROGRESS_HIDDEN),
+    });
+    sender
+        .send(QueuedCommand {
+            command: WorkerCommand::SetPlaylist(Vec::new()),
+            epoch: 0,
+        })
+        .unwrap();
+    drop(sender);
+
+    worker_loop(receiver, Arc::clone(&shared), None, false);
+
+    assert!(shared.cancel.load(Ordering::Acquire));
+}
+
+#[test]
 fn controller_loads_seeks_and_stops_without_opening_audio() {
     let fixture = Fixture::new();
     let controller = StudioController::new();
