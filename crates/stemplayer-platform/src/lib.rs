@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use stemplayer_domain::{DeviceId, ErrorCode, PlayerError};
 use stemplayer_format::{SelectedFile, SourceGroup};
 
@@ -14,6 +15,7 @@ pub const MAX_PLAYLIST_SOURCES: usize = 512;
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 const MAX_SETTING_TEXT_CHARS: usize = 4_096;
 const MAX_LOCAL_SOURCE_ENTRIES: usize = 4_096;
+static NEXT_SETTINGS_TEMP: AtomicU64 = AtomicU64::new(1);
 
 pub trait PlatformPort: Send + Sync {
     fn default_device(&self) -> Result<Option<DeviceId>, PlayerError>;
@@ -219,27 +221,50 @@ fn read_settings(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub fn load_settings(path: &Path) -> SettingsLoad {
-    let bytes = match read_settings(path) {
-        Ok(bytes) => bytes,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            return SettingsLoad::Missing(LocalSettings::default());
-        }
-        Err(_) => return SettingsLoad::Recovered(LocalSettings::default()),
-    };
-    match serde_json::from_slice::<LocalSettings>(&bytes) {
+fn parse_settings(bytes: &[u8]) -> Option<SettingsLoad> {
+    match serde_json::from_slice::<LocalSettings>(bytes) {
         Ok(settings)
             if settings.schema_version == SETTINGS_SCHEMA_VERSION && valid_settings(&settings) =>
         {
-            SettingsLoad::Loaded(settings)
+            Some(SettingsLoad::Loaded(settings))
         }
         Ok(settings) if matches!(settings.schema_version, 1..=3) && valid_settings(&settings) => {
-            SettingsLoad::Migrated(LocalSettings {
+            Some(SettingsLoad::Migrated(LocalSettings {
                 schema_version: SETTINGS_SCHEMA_VERSION,
                 ..settings
-            })
+            }))
         }
-        Ok(_) | Err(_) => SettingsLoad::Recovered(LocalSettings::default()),
+        Ok(_) | Err(_) => None,
+    }
+}
+
+fn settings_backup_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("settings");
+    path.with_file_name(format!(".{file_name}.bak"))
+}
+
+pub fn load_settings(path: &Path) -> SettingsLoad {
+    let primary = read_settings(path);
+    if let Ok(bytes) = &primary
+        && let Some(settings) = parse_settings(bytes)
+    {
+        return settings;
+    }
+    let backup = read_settings(&settings_backup_path(path));
+    if let Ok(bytes) = &backup
+        && let Some(settings) = parse_settings(bytes)
+    {
+        return SettingsLoad::Recovered(settings.settings().clone());
+    }
+    if matches!(&primary, Err(source) if source.kind() == std::io::ErrorKind::NotFound)
+        && matches!(&backup, Err(source) if source.kind() == std::io::ErrorKind::NotFound)
+    {
+        SettingsLoad::Missing(LocalSettings::default())
+    } else {
+        SettingsLoad::Recovered(LocalSettings::default())
     }
 }
 
@@ -264,9 +289,9 @@ pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("settings");
-    let suffix = std::process::id();
-    let temporary = path.with_file_name(format!(".{file_name}.{suffix}.tmp"));
-    let backup = path.with_file_name(format!(".{file_name}.{suffix}.bak"));
+    let id = NEXT_SETTINGS_TEMP.fetch_add(1, Ordering::Relaxed);
+    let temporary = path.with_file_name(format!(".{file_name}.{}-{id}.tmp", std::process::id()));
+    let backup = settings_backup_path(path);
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -277,6 +302,12 @@ pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<(
     }
     drop(file);
     if path.exists() {
+        if let Err(error) = fs::remove_file(&backup)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
         if let Err(error) = fs::rename(path, &backup) {
             let _ = fs::remove_file(&temporary);
             return Err(error);
@@ -289,7 +320,11 @@ pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<(
         let _ = fs::remove_file(backup);
         Ok(())
     } else {
-        fs::rename(temporary, path)
+        let result = fs::rename(temporary, path);
+        if result.is_ok() {
+            let _ = fs::remove_file(backup);
+        }
+        result
     }
 }
 
@@ -646,6 +681,39 @@ mod tests {
         };
         assert!(save_settings(&path, &unsupported).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settings_save_ignores_stale_pid_temporary() {
+        let root = test_path("stale-settings-temporary");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("settings.json");
+        let stale = root.join(format!(".settings.json.{}.tmp", std::process::id()));
+        fs::write(&stale, b"stale").unwrap();
+
+        let result = save_settings(&path, &LocalSettings::default());
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn settings_load_recovers_fixed_backup() {
+        let root = test_path("settings-backup");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("settings.json");
+        let backup = root.join(".settings.json.bak");
+        let settings = LocalSettings {
+            diagnostics_visible: true,
+            ..LocalSettings::default()
+        };
+        fs::write(&backup, serde_json::to_vec(&settings).unwrap()).unwrap();
+
+        let loaded = load_settings(&path);
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(matches!(loaded, SettingsLoad::Recovered(_)));
+        assert_eq!(loaded.settings(), &settings);
     }
 
     #[test]
