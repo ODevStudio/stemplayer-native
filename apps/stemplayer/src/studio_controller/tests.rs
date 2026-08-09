@@ -50,6 +50,11 @@ fn playlist_inspection_preserves_cancellation() {
 }
 
 #[test]
+fn cache_write_only_work_uses_a_bounded_poll_timeout() {
+    assert_eq!(worker_timeout(false, false, true), ACTIVE_TICK);
+}
+
+#[test]
 fn playlist_reorder_preserves_completed_analysis() {
     let first = PathBuf::from("first.mp3");
     let second = PathBuf::from("second.mp3");

@@ -1140,6 +1140,18 @@ fn resampler_input_frames(source_rate: u32, output_rate: u32) -> usize {
         .clamp(1, RENDER_FRAMES as u128) as usize
 }
 
+fn worker_timeout(
+    playing: bool,
+    immediate_work_pending: bool,
+    cache_write_pending: bool,
+) -> Duration {
+    match (playing, immediate_work_pending, cache_write_pending) {
+        (true, _, _) | (false, false, true) => ACTIVE_TICK,
+        (false, true, _) => Duration::ZERO,
+        (false, false, false) => IDLE_TICK,
+    }
+}
+
 fn worker_loop(
     receiver: Receiver<QueuedCommand>,
     shared: Arc<Shared>,
@@ -1154,16 +1166,11 @@ fn worker_loop(
                 TransportState::Priming | TransportState::Playing
             )
         });
-        let timeout = if playing {
-            ACTIVE_TICK
-        } else if state.analysis.is_some()
-            || state.playlist_work_pending()
-            || state.cache_write_pending()
-        {
-            Duration::ZERO
-        } else {
-            IDLE_TICK
-        };
+        let timeout = worker_timeout(
+            playing,
+            state.analysis.is_some() || state.playlist_work_pending(),
+            state.cache_write_pending(),
+        );
         let timeout = state.output_reopen_at.map_or(timeout, |deadline| {
             timeout.min(deadline.saturating_duration_since(Instant::now()))
         });
