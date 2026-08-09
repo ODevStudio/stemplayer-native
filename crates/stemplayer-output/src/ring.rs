@@ -187,7 +187,8 @@ impl OutputConsumer {
         let mut discarded = 0;
         let mut underflows = 0;
         let mut consumed = 0;
-        for output_frame in output.chunks_mut(channels) {
+        let mut output_frames = output.chunks_exact_mut(channels);
+        for output_frame in &mut output_frames {
             let generation = self.counters.generation.load(Ordering::Acquire);
             let frame = self
                 .pop_for_generation(generation, &mut discarded)
@@ -200,6 +201,7 @@ impl OutputConsumer {
             output_frame[1] = T::from_float(frame.right);
             consumed += 1;
         }
+        output_frames.into_remainder().fill(T::silence());
         self.counters
             .consumed_frames
             .fetch_add(consumed, Ordering::Relaxed);
@@ -512,6 +514,22 @@ mod tests {
         let mut output = [0_i16; 2];
         consumer.write(&mut output, 2);
         assert_eq!(output, [i16::MIN, i16::MAX]);
+    }
+
+    #[test]
+    fn incomplete_callback_frame_is_silenced_without_consuming_audio() {
+        let (mut producer, mut consumer) = output_ring(1).unwrap();
+        let frame = StereoFrame {
+            left: 1.0,
+            right: -1.0,
+        };
+        assert!(producer.push(frame));
+        let mut output = [1.0_f32];
+
+        consumer.write(&mut output, 2);
+
+        assert_eq!(output, [0.0]);
+        assert_eq!(consumer.pop(), Some(frame));
     }
 
     #[test]
