@@ -75,11 +75,22 @@ impl HlsClient {
                 "HLS source is missing a stem waveform",
             ));
         }
+        let waveforms = waveforms.map(Option::unwrap);
+        let samples_per_peak = waveforms[0].samples_per_peak;
+        let peak_count = waveforms[0].minimum.len();
+        if waveforms.iter().any(|waveform| {
+            waveform.samples_per_peak != samples_per_peak || waveform.minimum.len() != peak_count
+        }) {
+            return Err(invalid(
+                ErrorCode::HlsStemsetInvalid,
+                "HLS stem waveforms are not aligned",
+            ));
+        }
         HlsPlaybackSource::new(
             Arc::clone(&self.transport),
             manifest,
             playlists,
-            waveforms.map(Option::unwrap),
+            waveforms,
             started.elapsed(),
         )
         .map(Arc::new)
@@ -258,5 +269,42 @@ mod tests {
                 .code,
             ErrorCode::BundleAborted
         );
+    }
+
+    #[test]
+    fn rejects_misaligned_stem_waveforms() {
+        for waveform in [
+            serde_json::json!({
+                "schema": "stem-waveform-v1",
+                "samples_per_peak": 24_000,
+                "min": [-0.5, -0.25],
+                "max": [0.5, 0.25]
+            }),
+            serde_json::json!({
+                "schema": "stem-waveform-v1",
+                "samples_per_peak": 48_000,
+                "min": [-0.5],
+                "max": [0.5]
+            }),
+        ] {
+            let mut transport = responses(|_| {});
+            transport.0.insert(
+                "https://example.test/media/vocals.waveform.json".into(),
+                serde_json::to_vec(&waveform).unwrap(),
+            );
+            let client = HlsClient::new(Arc::new(transport), false);
+
+            assert_eq!(
+                client
+                    .open(
+                        "https://example.test/media/stemset.json",
+                        &AtomicBool::new(false),
+                    )
+                    .err()
+                    .unwrap()
+                    .code,
+                ErrorCode::HlsStemsetInvalid
+            );
+        }
     }
 }

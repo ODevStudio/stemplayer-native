@@ -37,7 +37,7 @@ Every route has identical media sequence, segment count, per-index duration, and
 
 ## Waveforms
 
-Each waveform response is at most 2 MiB and schema `stem-waveform-v1`. `samples_per_peak` is positive. `min` and `max` arrays have equal length, at most 1,000,000 entries, contain finite numbers, and satisfy `min <= max`. The native client may later support multiple levels, but this input level is validated before allocation.
+Each waveform response is at most 2 MiB and schema `stem-waveform-v1`. `samples_per_peak` is positive. `min` and `max` arrays have equal length, at most 1,000,000 entries, contain finite numbers, and satisfy `min <= max`. All four stem waveforms have identical `samples_per_peak` and array length. The native client may later support multiple levels, but this input level is validated before allocation.
 
 ## Segments And Preroll
 
