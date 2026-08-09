@@ -815,8 +815,7 @@ impl WorkerState {
         };
         let source = self.playlist_analysis.sources[index].clone();
         let item: Result<Option<PlaylistAnalysisItem>, PlayerError> = (|| {
-            let cancelled = AtomicBool::new(false);
-            let session = open_local_session(&source, GenerationId::INITIAL, &cancelled)?;
+            let session = open_local_session(&source, GenerationId::INITIAL, &shared.cancel)?;
             let fingerprint = waveform_fingerprint(&session)?;
             let metadata = session.metadata().clone();
             let config = session.buffer_config();
@@ -848,6 +847,7 @@ impl WorkerState {
         })();
         match item {
             Ok(Some(item)) => self.playlist_analysis.active = Some(item),
+            Err(error) if error.code == ErrorCode::BundleAborted => return Err(error),
             Ok(None) | Err(_) => self.playlist_analysis.completed[index] = true,
         }
         self.refresh_playlist_progress(shared);
@@ -1088,6 +1088,12 @@ fn open_local_session(
     generation: GenerationId,
     cancelled: &AtomicBool,
 ) -> Result<PlaybackSession, PlayerError> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err(PlayerError::new(
+            ErrorCode::BundleAborted,
+            "Source operation was cancelled",
+        ));
+    }
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -1095,8 +1101,12 @@ fn open_local_session(
         .to_ascii_lowercase();
     match extension.as_str() {
         "mp4" => PlaybackSession::open_compressed(path, generation, cancelled),
-        "m4a" => PlaybackSession::open_compressed(path, generation, cancelled)
-            .or_else(|_| PlaybackSession::open_audio(path, generation)),
+        "m4a" => match PlaybackSession::open_compressed(path, generation, cancelled) {
+            Err(error) if error.code != ErrorCode::BundleAborted => {
+                PlaybackSession::open_audio(path, generation)
+            }
+            result => result,
+        },
         "mp3" | "flac" | "ogg" | "oga" => PlaybackSession::open_audio(path, generation),
         "wav" if !role_suffixed_wav(path) => PlaybackSession::open_audio(path, generation),
         "json" | "wav" if path.is_file() => {

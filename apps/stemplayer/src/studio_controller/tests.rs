@@ -12,6 +12,44 @@ fn cancelled_decode_is_not_published_as_an_error() {
 }
 
 #[test]
+fn playlist_inspection_preserves_cancellation() {
+    let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+    let source = std::env::temp_dir().join(format!(
+        "stemplayer-controller-{}-{id}.m4a",
+        std::process::id()
+    ));
+    let cache_path = source.with_extension("waveform-cache");
+    std::fs::write(&source, [0]).unwrap();
+    let cache = Arc::new(
+        WaveformCache::new(
+            cache_path.clone(),
+            stemplayer_waveform::CacheConfig::default(),
+        )
+        .unwrap(),
+    );
+    let shared = Shared {
+        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
+        waveform: RwLock::new(None),
+        subscribers: Mutex::new(Vec::new()),
+        command_admission: Mutex::new(()),
+        cancel: Arc::new(AtomicBool::new(true)),
+        epoch: AtomicU64::new(0),
+        shutdown: AtomicBool::new(false),
+        playlist_cache_progress: AtomicU8::new(PLAYLIST_PROGRESS_HIDDEN),
+    };
+    let mut state = WorkerState::new(Some(cache), true);
+    state.playlist_analysis.replace(vec![source.clone()]);
+
+    let result = state.analyze_playlist(&shared);
+    let completed = state.playlist_analysis.completed.clone();
+    let _ = std::fs::remove_file(source);
+    let _ = std::fs::remove_dir_all(cache_path);
+
+    assert_eq!(result.unwrap_err().code, ErrorCode::BundleAborted);
+    assert_eq!(completed, vec![false]);
+}
+
+#[test]
 fn playlist_reorder_preserves_completed_analysis() {
     let first = PathBuf::from("first.mp3");
     let second = PathBuf::from("second.mp3");
