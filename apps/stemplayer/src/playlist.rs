@@ -358,12 +358,12 @@ fn collect_directory(
     wav_prefix_filter: Option<&str>,
     candidates: &mut BTreeSet<PathBuf>,
 ) -> Result<(), PlayerError> {
-    for entry in fs::read_dir(directory)
+    for (index, entry) in fs::read_dir(directory)
         .map_err(|source| error("Playlist folder cannot be read").with_source(source))?
-        .take(MAX_SCANNED_FILES.saturating_add(1))
+        .enumerate()
     {
-        if candidates.len() >= MAX_SCANNED_FILES {
-            return Err(error("Playlist folder contains too many files"));
+        if index >= MAX_SCANNED_FILES || candidates.len() >= MAX_SCANNED_FILES {
+            return Err(error("Playlist folder contains too many entries"));
         }
         let entry =
             entry.map_err(|source| error("Playlist entry cannot be read").with_source(source))?;
@@ -490,6 +490,27 @@ mod tests {
             ["first.stem", "second"]
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn playlist_scan_limit_counts_unsupported_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "stemplayer-playlist-limit-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        for index in 0..=MAX_SCANNED_FILES {
+            fs::create_dir(root.join(index.to_string())).unwrap();
+        }
+
+        let result = discover(std::slice::from_ref(&root));
+
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]
