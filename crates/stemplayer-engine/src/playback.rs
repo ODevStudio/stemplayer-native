@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use stemplayer_domain::{
-    BoundedText, GainDb, GenerationId, Microseconds, OutputPreference, PlaybackPosition,
+    BoundedText, ErrorCode, GainDb, GenerationId, Microseconds, OutputPreference, PlaybackPosition,
     PlayerError, PlayerSnapshot, SampleRate, SnapshotDetails, SourceDiagnostics, SourceFrame,
     StemRole, TransportMachine, TransportState, WaveformState,
 };
@@ -38,6 +38,12 @@ impl PlaybackEngine {
         session: PlaybackSession,
         cancellation: Arc<AtomicBool>,
     ) -> Result<Self, PlayerError> {
+        if session.metadata().end_frame_exclusive <= session.metadata().start_frame {
+            return Err(PlayerError::new(
+                ErrorCode::TimelineInvalid,
+                "Playback source timeline must contain at least one frame",
+            ));
+        }
         let config = session.buffer_config();
         let start_frame = session.metadata().start_frame.get().max(0) as u64;
         let ring = SynchronizedRing::new(
@@ -642,6 +648,26 @@ mod tests {
                 "cancelled",
             ))
         }
+    }
+
+    #[test]
+    fn empty_playback_timelines_are_rejected() {
+        let session = PlaybackSession::new_external(
+            "empty",
+            48_000,
+            0,
+            false,
+            GenerationId::INITIAL,
+            Arc::new(BlockingSource {
+                started: Arc::new(AtomicBool::new(false)),
+                release: Arc::new(AtomicBool::new(false)),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            PlaybackEngine::new(session).err().unwrap().code,
+            stemplayer_domain::ErrorCode::TimelineInvalid
+        );
     }
 
     #[test]
