@@ -270,12 +270,12 @@ fn entries(root: &Path) -> Result<Vec<Entry>, PlayerError> {
     let mut entries = Vec::new();
     let directory = fs::read_dir(root)
         .map_err(|source| io_error("Waveform cache directory cannot be read", source))?;
-    for item in directory.take(MAX_SCAN_ENTRIES + 1) {
-        let item =
-            item.map_err(|source| io_error("Waveform cache entry cannot be read", source))?;
-        if entries.len() == MAX_SCAN_ENTRIES {
+    for (index, item) in directory.take(MAX_SCAN_ENTRIES + 1).enumerate() {
+        if index == MAX_SCAN_ENTRIES {
             return Err(error("Waveform cache directory exceeds its scan limit"));
         }
+        let item =
+            item.map_err(|source| io_error("Waveform cache entry cannot be read", source))?;
         let path = item.path();
         if path.extension().and_then(|value| value.to_str()) != Some(EXTENSION) {
             continue;
@@ -665,6 +665,16 @@ mod tests {
             read_record(&path).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn scan_limit_counts_unrelated_directory_entries() {
+        let fixture = Fixture::new();
+        for index in 0..=MAX_SCAN_ENTRIES {
+            fs::write(fixture.0.join(format!("{index}.txt")), []).unwrap();
+        }
+
+        assert!(entries(&fixture.0).is_err());
     }
 
     #[test]
