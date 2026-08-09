@@ -344,7 +344,15 @@ fn valid_setting_text(value: &str) -> bool {
 }
 
 pub fn select_local_source(selection: &Path) -> Result<SourceGroup, PlayerError> {
-    if selection.is_dir() {
+    let metadata = fs::symlink_metadata(selection)
+        .map_err(|error| selection_io_error("Selected source is unavailable", error))?;
+    if metadata.file_type().is_symlink() {
+        return Err(selection_error(
+            ErrorCode::ManifestPathUnsafe,
+            "Selection must be a regular file or folder",
+        ));
+    }
+    if metadata.is_dir() {
         let files = selected_files(selection, |_| true)?;
         return if files
             .iter()
@@ -355,9 +363,7 @@ pub fn select_local_source(selection: &Path) -> Result<SourceGroup, PlayerError>
             SourceGroup::inferred(source_display_name(selection), files)
         };
     }
-    let metadata = fs::symlink_metadata(selection)
-        .map_err(|error| selection_io_error("Selected source is unavailable", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !metadata.is_file() {
         return Err(selection_error(
             ErrorCode::ManifestPathUnsafe,
             "Selection must be a regular file or folder",
@@ -532,6 +538,26 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
+    fn symlink_directory(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_directory(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(unix)]
+    fn remove_directory_symlink(path: &Path) -> std::io::Result<()> {
+        fs::remove_file(path)
+    }
+
+    #[cfg(windows)]
+    fn remove_directory_symlink(path: &Path) -> std::io::Result<()> {
+        fs::remove_dir(path)
+    }
+
     fn test_path(name: &str) -> PathBuf {
         env::temp_dir().join(format!(
             "stemplayer-platform-{name}-{}-{}",
@@ -705,6 +731,29 @@ mod tests {
         let group = select_local_source(&bass).unwrap();
         assert_eq!(group.display_name(), "song");
         assert!(group.manifest_reader().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn directory_symlinks_are_rejected() {
+        let root = test_path("directory-symlink");
+        let target = root.join("target");
+        let link = root.join("link");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("manifest.json"), b"{}").unwrap();
+        if let Err(error) = symlink_directory(&target, &link) {
+            fs::remove_dir_all(root).unwrap();
+            assert!(matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+            ));
+            return;
+        }
+        assert_eq!(
+            select_local_source(&link).err().unwrap().code,
+            ErrorCode::ManifestPathUnsafe
+        );
+        remove_directory_symlink(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
