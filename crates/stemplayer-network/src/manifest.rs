@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::url_policy::{child_url, redacted};
 
-const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 pub const MAX_WAVEFORM_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_SEGMENTS: usize = 100_000;
@@ -151,6 +151,7 @@ impl HlsManifest {
             || raw.codec.bitrate_bps == 0
             || raw.codec.bitrate_bps > MAX_SAFE_INTEGER
             || raw.segment_duration_us == 0
+            || raw.segment_duration_us > MAX_SAFE_INTEGER
             || raw.segment_count == 0
             || raw.segment_count > MAX_SEGMENTS
             || raw.master_present != raw.master.is_some()

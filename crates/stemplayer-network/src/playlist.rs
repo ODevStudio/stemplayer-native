@@ -1,7 +1,7 @@
 use stemplayer_domain::{ErrorCode, PlayerError};
 use url::Url;
 
-use crate::manifest::{MAX_SEGMENTS, invalid};
+use crate::manifest::{MAX_SAFE_INTEGER, MAX_SEGMENTS, invalid};
 use crate::url_policy::child_url;
 
 pub const MAX_PLAYLIST_BYTES: usize = 1024 * 1024;
@@ -64,6 +64,12 @@ impl MediaPlaylist {
                         "HLS media sequence is invalid",
                     )
                 })?;
+                if media_sequence > MAX_SAFE_INTEGER {
+                    return Err(invalid(
+                        ErrorCode::HlsStemsetInvalid,
+                        "HLS media sequence is invalid",
+                    ));
+                }
             } else if let Some(value) = line.strip_prefix("#EXTINF:") {
                 let duration = parse_duration(value.split(',').next().unwrap_or(""))?;
                 let reference = lines
@@ -236,5 +242,18 @@ mod tests {
         assert_eq!(playlist.segments[1].start_frame, 1);
         assert_eq!(playlist.segments[1].end_frame_exclusive, 44_100);
         assert_eq!(playlist.segments[1].trim_start_frames, 1024);
+    }
+
+    #[test]
+    fn rejects_oversized_media_sequence() {
+        let url = Url::parse("https://example.test/a/track.m3u8").unwrap();
+        let playlist = b"#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:9007199254740992\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:1.000000,\na.m4a\n#EXT-X-ENDLIST\n";
+
+        assert_eq!(
+            MediaPlaylist::parse(playlist, &url, 48_000, 0)
+                .unwrap_err()
+                .code,
+            ErrorCode::HlsStemsetInvalid
+        );
     }
 }

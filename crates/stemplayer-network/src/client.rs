@@ -307,4 +307,26 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn rejects_oversized_manifest_segment_duration() {
+        let client = HlsClient::new(
+            Arc::new(responses(|manifest| {
+                manifest["segment_duration_us"] = 9_007_199_254_740_992_u64.into();
+            })),
+            false,
+        );
+
+        assert_eq!(
+            client
+                .open(
+                    "https://example.test/media/stemset.json",
+                    &AtomicBool::new(false),
+                )
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::HlsStemsetInvalid
+        );
+    }
 }
