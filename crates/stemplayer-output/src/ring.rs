@@ -184,11 +184,11 @@ impl OutputConsumer {
             output.fill(T::silence());
             return;
         }
-        let generation = self.counters.generation.load(Ordering::Acquire);
         let mut discarded = 0;
         let mut underflows = 0;
         let mut consumed = 0;
         for output_frame in output.chunks_mut(channels) {
+            let generation = self.counters.generation.load(Ordering::Acquire);
             let frame = self
                 .pop_for_generation(generation, &mut discarded)
                 .unwrap_or_else(|| {
@@ -360,6 +360,39 @@ fn snapshot(counters: &Counters, capacity_frames: usize) -> OutputMetrics {
 mod tests {
     use super::*;
 
+    std::thread_local! {
+        static RESET_PRODUCER: std::cell::RefCell<Option<OutputProducer>> = const { std::cell::RefCell::new(None) };
+        static OUTPUT_CONVERSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    struct ResetSample(f32);
+
+    impl OutputSample for ResetSample {
+        fn silence() -> Self {
+            Self(0.0)
+        }
+
+        fn from_float(value: f32) -> Self {
+            OUTPUT_CONVERSIONS.with(|conversions| {
+                let next = conversions.get() + 1;
+                conversions.set(next);
+                if next == 2 {
+                    RESET_PRODUCER.with(|producer| {
+                        let mut producer = producer.borrow_mut();
+                        let producer = producer.as_mut().unwrap();
+                        producer.reset();
+                        assert!(producer.push(StereoFrame {
+                            left: 3.0,
+                            right: -3.0,
+                        }));
+                    });
+                }
+            });
+            Self(value)
+        }
+    }
+
     #[test]
     fn ring_never_overwrites_and_reports_underflow() {
         let (mut producer, mut consumer) = output_ring(2).unwrap();
@@ -436,6 +469,36 @@ mod tests {
         }));
         assert_eq!(producer.reset(), 1);
         assert_eq!(consumer.pop(), None);
+        assert_eq!(consumer.metrics().discarded_frames, 1);
+    }
+
+    #[test]
+    fn callback_reset_discards_remaining_stale_frames() {
+        let (mut producer, mut consumer) = output_ring(3).unwrap();
+        assert!(producer.push(StereoFrame {
+            left: 1.0,
+            right: -1.0,
+        }));
+        assert!(producer.push(StereoFrame {
+            left: 2.0,
+            right: -2.0,
+        }));
+        RESET_PRODUCER.with(|slot| *slot.borrow_mut() = Some(producer));
+        OUTPUT_CONVERSIONS.with(|conversions| conversions.set(0));
+
+        let mut output = [ResetSample::default(); 4];
+        consumer.write(&mut output, 2);
+        RESET_PRODUCER.with(|slot| slot.borrow_mut().take());
+
+        assert_eq!(
+            output,
+            [
+                ResetSample(1.0),
+                ResetSample(-1.0),
+                ResetSample(3.0),
+                ResetSample(-3.0),
+            ]
+        );
         assert_eq!(consumer.metrics().discarded_frames, 1);
     }
 
