@@ -2,6 +2,7 @@ use sha2::{Digest, Sha256};
 use std::array;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,7 +76,13 @@ impl WaveformCache {
         })
     }
 
-    pub fn load(&self, fingerprint: SourceFingerprint, generation: GenerationId) -> CacheResult {
+    pub fn load(
+        &self,
+        fingerprint: SourceFingerprint,
+        generation: GenerationId,
+        expected_sample_rate: SampleRate,
+        expected_timeline: Range<SourceFrame>,
+    ) -> CacheResult {
         if !self.enabled {
             return result(CacheStatus::Disabled);
         }
@@ -95,7 +102,11 @@ impl WaveformCache {
             }
         };
         match decode(&bytes, fingerprint, generation) {
-            Ok(snapshot) => {
+            Ok(snapshot)
+                if snapshot.sample_rate == expected_sample_rate
+                    && snapshot.start_frame == expected_timeline.start
+                    && snapshot.end_frame_exclusive == expected_timeline.end =>
+            {
                 touch(&path);
                 CacheResult {
                     status: CacheStatus::Hit,
@@ -103,7 +114,7 @@ impl WaveformCache {
                     bytes: bytes.len() as u64,
                 }
             }
-            Err(_) => {
+            Ok(_) | Err(_) => {
                 let _ = fs::remove_file(path);
                 result(CacheStatus::Error)
             }
@@ -604,6 +615,15 @@ mod tests {
         analyzer.finish(CacheStatus::Miss).unwrap()
     }
 
+    fn load(cache: &WaveformCache, fingerprint: SourceFingerprint) -> CacheResult {
+        cache.load(
+            fingerprint,
+            GenerationId::INITIAL,
+            SampleRate::new(48_000).unwrap(),
+            SourceFrame::new(0)..SourceFrame::new(257),
+        )
+    }
+
     fn ordinary_snapshot(fingerprint: SourceFingerprint) -> WaveformSnapshot {
         let frames = 4_096_usize;
         let mut analyzer = PeakAnalyzer::new(
@@ -631,25 +651,41 @@ mod tests {
         let fixture = Fixture::new();
         let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
         let fingerprint = SourceFingerprint::from_bytes([9; 32]);
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Miss
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Miss);
         cache.write(&snapshot(fingerprint)).unwrap();
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Hit
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Hit);
         fs::write(cache.path(fingerprint), b"corrupt").unwrap();
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Error
-        );
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Miss
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Miss);
         cache.clear_all().unwrap();
+    }
+
+    #[test]
+    fn cache_hit_requires_matching_source_metadata() {
+        let fixture = Fixture::new();
+        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
+        let fingerprint = SourceFingerprint::from_bytes([11; 32]);
+        let waveform = snapshot(fingerprint);
+
+        for (sample_rate, timeline) in [
+            (
+                SampleRate::new(44_100).unwrap(),
+                SourceFrame::new(0)..SourceFrame::new(257),
+            ),
+            (
+                SampleRate::new(48_000).unwrap(),
+                SourceFrame::new(1)..SourceFrame::new(257),
+            ),
+            (
+                SampleRate::new(48_000).unwrap(),
+                SourceFrame::new(0)..SourceFrame::new(258),
+            ),
+        ] {
+            cache.write(&waveform).unwrap();
+            let result = cache.load(fingerprint, GenerationId::INITIAL, sample_rate, timeline);
+            assert_eq!(result.status, CacheStatus::Error);
+            assert!(result.snapshot.is_none());
+        }
     }
 
     #[test]
@@ -688,7 +724,12 @@ mod tests {
         let fingerprint = SourceFingerprint::from_bytes([8; 32]);
         cache.write(&ordinary_snapshot(fingerprint)).unwrap();
         let restored = cache
-            .load(fingerprint, GenerationId::INITIAL)
+            .load(
+                fingerprint,
+                GenerationId::INITIAL,
+                SampleRate::new(48_000).unwrap(),
+                SourceFrame::new(0)..SourceFrame::new(4_096),
+            )
             .snapshot
             .unwrap();
         assert_eq!(restored.levels.len(), 1);
@@ -764,10 +805,7 @@ mod tests {
         let checksum_start = bytes.len() - 32;
         bytes[checksum_start..].copy_from_slice(&checksum);
         fs::write(&path, bytes).unwrap();
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Error
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
         assert!(!path.exists());
     }
     #[test]
@@ -785,10 +823,7 @@ mod tests {
         let checksum = Sha256::digest(&bytes[..checksum_start]);
         bytes[checksum_start..].copy_from_slice(&checksum);
         fs::write(&path, bytes).unwrap();
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Error
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
 
         cache.write(&waveform).unwrap();
         let mut bytes = fs::read(&path).unwrap();
@@ -797,10 +832,7 @@ mod tests {
         let checksum = Sha256::digest(&bytes[..checksum_start]);
         bytes[checksum_start..].copy_from_slice(&checksum);
         fs::write(&path, bytes).unwrap();
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Error
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
     }
 
     #[test]
@@ -818,14 +850,8 @@ mod tests {
         let second = SourceFingerprint::from_bytes([2; 32]);
         cache.write(&snapshot(first)).unwrap();
         cache.write(&snapshot(second)).unwrap();
-        assert_eq!(
-            cache.load(first, GenerationId::INITIAL).status,
-            CacheStatus::Miss
-        );
-        assert_eq!(
-            cache.load(second, GenerationId::INITIAL).status,
-            CacheStatus::Hit
-        );
+        assert_eq!(load(&cache, first).status, CacheStatus::Miss);
+        assert_eq!(load(&cache, second).status, CacheStatus::Hit);
     }
 
     #[test]
@@ -835,10 +861,7 @@ mod tests {
         let fingerprint = SourceFingerprint::from_bytes([3; 32]);
         cache.write(&snapshot(fingerprint)).unwrap();
         cache.set_capacity_bytes(1).unwrap();
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Miss
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Miss);
         assert!(cache.write(&snapshot(fingerprint)).is_err());
     }
 
@@ -860,10 +883,7 @@ mod tests {
         for handle in handles {
             handle.join().unwrap().unwrap();
         }
-        assert_eq!(
-            cache.load(fingerprint, GenerationId::INITIAL).status,
-            CacheStatus::Hit
-        );
+        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Hit);
     }
 
     #[test]

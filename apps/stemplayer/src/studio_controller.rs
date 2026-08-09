@@ -532,7 +532,14 @@ impl WorkerState {
             .cache
             .as_ref()
             .filter(|_| self.cache_enabled)
-            .map(|cache| cache.load(fingerprint, self.generation));
+            .map(|cache| {
+                cache.load(
+                    fingerprint,
+                    self.generation,
+                    metadata.sample_rate,
+                    metadata.start_frame..metadata.end_frame_exclusive,
+                )
+            });
         let cache_status = cached
             .as_ref()
             .map_or(CacheStatus::Disabled, |hit| hit.status);
@@ -819,10 +826,14 @@ impl WorkerState {
             let fingerprint = waveform_fingerprint(&session)?;
             let metadata = session.metadata().clone();
             let config = session.buffer_config();
-            let cached = self
-                .cache
-                .as_ref()
-                .map(|cache| cache.load(fingerprint, GenerationId::INITIAL));
+            let cached = self.cache.as_ref().map(|cache| {
+                cache.load(
+                    fingerprint,
+                    GenerationId::INITIAL,
+                    metadata.sample_rate,
+                    metadata.start_frame..metadata.end_frame_exclusive,
+                )
+            });
             let cache_status = cached
                 .as_ref()
                 .map_or(CacheStatus::Disabled, |result| result.status);

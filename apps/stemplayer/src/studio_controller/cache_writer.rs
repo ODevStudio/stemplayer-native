@@ -167,13 +167,27 @@ mod tests {
         writer.write(snapshot(first)).unwrap();
         writer.clear_all().unwrap();
         assert_eq!(
-            cache.load(first, GenerationId::INITIAL).status,
+            cache
+                .load(
+                    first,
+                    GenerationId::INITIAL,
+                    SampleRate::new(48_000).unwrap(),
+                    SourceFrame::new(0)..SourceFrame::new(8),
+                )
+                .status,
             CacheStatus::Miss
         );
         writer.write(snapshot(second)).unwrap();
         writer.shutdown().unwrap();
         assert_eq!(
-            cache.load(second, GenerationId::INITIAL).status,
+            cache
+                .load(
+                    second,
+                    GenerationId::INITIAL,
+                    SampleRate::new(48_000).unwrap(),
+                    SourceFrame::new(0)..SourceFrame::new(8),
+                )
+                .status,
             CacheStatus::Hit
         );
         let _ = fs::remove_dir_all(root);
