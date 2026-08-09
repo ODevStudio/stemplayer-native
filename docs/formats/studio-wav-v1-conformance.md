@@ -4,7 +4,7 @@ Status: Phase 4 implementation report, 2026-07-22.
 
 ## Source boundary
 
-The platform crate resolves a selected folder, its sibling `manifest.json`, or an explicit dropped-file group into a constrained `SourceGroup`. The format crate accepts only that provider. The platform adapter indexes regular selected files, rejects symlinks and mixed-folder groups, and the format layer rejects normalized-name collisions before opening manifest-referenced basenames. Neither layer searches parent folders or resolves URLs.
+The platform crate resolves a selected folder, its sibling `manifest.json`, or an explicit dropped-file group into a constrained `SourceGroup`. Local folder and dropped-file selection accepts at most 4,096 entries. The format crate accepts only that provider. The platform adapter indexes regular selected files, rejects symlinks and mixed-folder groups, and the format layer rejects normalized-name collisions before opening manifest-referenced basenames. Neither layer searches parent folders or resolves URLs.
 
 Basenames must be NFC, contain no separator, colon, control character, trailing dot or space, dot traversal, absolute prefix, UNC/device path, or Windows reserved device name. Matching uses NFC plus Unicode lowercase consistently on every platform.
 

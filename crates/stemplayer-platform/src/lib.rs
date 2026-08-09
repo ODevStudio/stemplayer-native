@@ -13,6 +13,7 @@ pub const MAX_RECENT_SOURCES: usize = 8;
 pub const MAX_PLAYLIST_SOURCES: usize = 512;
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 const MAX_SETTING_TEXT_CHARS: usize = 4_096;
+const MAX_LOCAL_SOURCE_ENTRIES: usize = 4_096;
 
 pub trait PlatformPort: Send + Sync {
     fn default_device(&self) -> Result<Option<DeviceId>, PlayerError>;
@@ -414,9 +415,16 @@ fn selected_files(
     include: impl Fn(&str) -> bool,
 ) -> Result<Vec<SelectedFile>, PlayerError> {
     let mut files = Vec::new();
-    for entry in fs::read_dir(root)
+    for (index, entry) in fs::read_dir(root)
         .map_err(|error| selection_io_error("Selected folder is unavailable", error))?
+        .enumerate()
     {
+        if index >= MAX_LOCAL_SOURCE_ENTRIES {
+            return Err(selection_error(
+                ErrorCode::ManifestTooLarge,
+                "Selected folder contains too many entries",
+            ));
+        }
         let entry =
             entry.map_err(|error| selection_io_error("Selected folder cannot be read", error))?;
         let file_type = entry
@@ -454,6 +462,12 @@ fn wav_bundle_prefix(name: &str) -> Option<String> {
 }
 
 pub fn select_local_paths(paths: &[PathBuf]) -> Result<SourceGroup, PlayerError> {
+    if paths.len() > MAX_LOCAL_SOURCE_ENTRIES {
+        return Err(selection_error(
+            ErrorCode::ManifestTooLarge,
+            "Dropped group contains too many entries",
+        ));
+    }
     if paths.len() == 1 {
         return select_local_source(&paths[0]);
     }
@@ -709,6 +723,26 @@ mod tests {
         assert!(select_local_paths(&[manifest, other]).is_err());
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(other_root).unwrap();
+    }
+
+    #[test]
+    fn oversized_local_source_selections_are_rejected() {
+        let root = test_path("oversized-local-source");
+        fs::create_dir(&root).unwrap();
+        let paths = (0..=MAX_LOCAL_SOURCE_ENTRIES)
+            .map(|index| {
+                let path = root.join(format!("{index}.wav"));
+                fs::write(&path, []).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+
+        let directory_error = select_local_source(&root).err().map(|error| error.code);
+        let dropped_error = select_local_paths(&paths).err().map(|error| error.code);
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(directory_error, Some(ErrorCode::ManifestTooLarge));
+        assert_eq!(dropped_error, Some(ErrorCode::ManifestTooLarge));
     }
 
     #[test]
