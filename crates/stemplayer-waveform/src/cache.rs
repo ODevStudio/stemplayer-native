@@ -316,6 +316,10 @@ fn ensure_root(root: &Path) -> Result<(), PlayerError> {
     Ok(())
 }
 
+fn valid_peak(peak: &Peak) -> bool {
+    peak.minimum.is_finite() && peak.maximum.is_finite() && peak.minimum <= peak.maximum
+}
+
 fn encode(snapshot: &WaveformSnapshot) -> Result<Vec<u8>, PlayerError> {
     if snapshot.levels.len() != 1 || snapshot.progress != 1.0 {
         return Err(error("Only complete single-level waveforms can be cached"));
@@ -337,8 +341,8 @@ fn encode(snapshot: &WaveformSnapshot) -> Result<Vec<u8>, PlayerError> {
         bytes.extend_from_slice(&(count as u64).to_le_bytes());
         for role in &level.roles {
             for peak in role.iter() {
-                if !peak.minimum.is_finite() || !peak.maximum.is_finite() {
-                    return Err(error("Waveform cache peak is not finite"));
+                if !valid_peak(peak) {
+                    return Err(error("Waveform cache peak is invalid"));
                 }
                 bytes.extend_from_slice(&peak.minimum.to_le_bytes());
                 bytes.extend_from_slice(&peak.maximum.to_le_bytes());
@@ -418,8 +422,8 @@ fn decode(
                     minimum: reader.f32()?,
                     maximum: reader.f32()?,
                 };
-                if !peak.minimum.is_finite() || !peak.maximum.is_finite() {
-                    return Err(error("Waveform cache peak is not finite"));
+                if !valid_peak(&peak) {
+                    return Err(error("Waveform cache peak is invalid"));
                 }
                 role.push(peak);
             }
@@ -689,6 +693,43 @@ mod tests {
             .unwrap();
         assert_eq!(restored.levels.len(), 1);
         assert_eq!(restored.levels[0].roles[0].len(), 1_024);
+    }
+
+    #[test]
+    fn inverted_peaks_are_rejected_on_encode_and_decode() {
+        let fingerprint = SourceFingerprint::from_bytes([10; 32]);
+        let mut invalid = snapshot(fingerprint);
+        let level = &invalid.levels[0];
+        let mut roles = level.roles.clone();
+        let mut peaks = roles[0].to_vec();
+        peaks[0] = Peak {
+            minimum: 1.0,
+            maximum: -1.0,
+        };
+        roles[0] = peaks.into();
+        invalid.levels = vec![PeakLevel {
+            frames_per_peak: level.frames_per_peak,
+            roles,
+        }]
+        .into();
+        assert!(encode(&invalid).is_err());
+
+        let mut encoded = encode(&snapshot(fingerprint)).unwrap();
+        let checksum_start = encoded.len() - 32;
+        let first_peak = MAGIC.len()
+            + size_of::<u16>()
+            + 32
+            + size_of::<u32>()
+            + size_of::<i64>() * 2
+            + size_of::<u8>()
+            + size_of::<u32>()
+            + size_of::<u64>();
+        encoded[first_peak..first_peak + 4].copy_from_slice(&1.0_f32.to_le_bytes());
+        encoded[first_peak + 4..first_peak + 8].copy_from_slice(&(-1.0_f32).to_le_bytes());
+        let checksum = Sha256::digest(&encoded[..checksum_start]);
+        encoded[checksum_start..].copy_from_slice(&checksum);
+
+        assert!(decode(&encoded, fingerprint, GenerationId::INITIAL).is_err());
     }
 
     #[test]
