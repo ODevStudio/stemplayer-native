@@ -22,7 +22,7 @@ impl SourceBlock {
             .ok()
             .and_then(|frames| frames.checked_mul(usize::from(channels)))
             .ok_or_else(invalid_block)?;
-        if channels == 0 || samples.len() != expected {
+        if frames == 0 || channels == 0 || samples.len() != expected {
             return Err(invalid_block());
         }
         Ok(Self {
@@ -256,5 +256,10 @@ mod tests {
         assert!(!ring.publish(stale).unwrap());
         assert_eq!(ring.read_frame(), 10);
         assert_eq!(ring.metrics().stale_blocks, 1);
+    }
+
+    #[test]
+    fn empty_source_blocks_are_rejected() {
+        assert!(SourceBlock::new(GenerationId::INITIAL, 0, 0, 2, vec![]).is_err());
     }
 }
