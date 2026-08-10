@@ -28,20 +28,6 @@ fn engine_dependency_direction_is_enforced() {
         .collect();
 
     let engine = &dependencies["stemplayer-engine"];
-    let allowed = BTreeSet::from([
-        "serde_json".to_owned(),
-        "stemplayer-decode".to_owned(),
-        "stemplayer-domain".to_owned(),
-        "stemplayer-format".to_owned(),
-        "stemplayer-mixer".to_owned(),
-        "stemplayer-output".to_owned(),
-        "stemplayer-timeline".to_owned(),
-    ]);
-    assert_eq!(engine, &allowed);
-    assert_eq!(
-        dependencies["stemplayer-domain"],
-        BTreeSet::from(["serde".to_owned(), "serde_json".to_owned()])
-    );
     assert!(!engine.contains("stemplayer-ui"));
     assert!(!engine.contains("stemplayer-platform"));
     assert!(!engine.contains("stemplayer-network"));

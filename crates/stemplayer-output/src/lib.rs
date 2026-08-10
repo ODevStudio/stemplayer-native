@@ -8,8 +8,6 @@ mod qualification;
 mod resampler;
 mod ring;
 
-use stemplayer_domain::PlayerError;
-
 pub use audit::{CallbackAuditReport, ReopenAuditReport, callback_audit, reopen_audit};
 pub use clock::{AudioClock, ClockSnapshot, LatencyConfidence};
 pub use device::{
@@ -22,7 +20,3 @@ pub use qualification::{
 };
 pub use resampler::PostMixResampler;
 pub use ring::{OutputConsumer, OutputMetrics, OutputProducer, StereoFrame, output_ring};
-
-pub trait OutputPort: Send {
-    fn stop(&mut self) -> Result<(), PlayerError>;
-}

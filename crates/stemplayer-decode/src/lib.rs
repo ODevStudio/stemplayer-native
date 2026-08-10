@@ -12,14 +12,10 @@ pub use segment::{DecodedSegment, decode_aac_segment};
 
 use serde::Serialize;
 use std::sync::atomic::AtomicBool;
-use stemplayer_domain::{ErrorCode, GenerationId, PlayerError};
+use stemplayer_domain::{ErrorCode, PlayerError};
 use stemplayer_format::{BoundedReader, SampleEncoding, StudioBundle, StudioRole, WaveInfo};
 
 pub const MAX_DECODE_FRAMES: u32 = 4096;
-
-pub trait Decoder: Send {
-    fn cancel(&mut self, generation: GenerationId) -> Result<(), PlayerError>;
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DecodedWindow {

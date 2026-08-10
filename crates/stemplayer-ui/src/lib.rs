@@ -16,9 +16,3 @@ pub use presentation::{
 
 #[cfg(feature = "development")]
 pub use mock::MockController;
-
-use stemplayer_domain::PlayerSnapshot;
-
-pub trait UiPort {
-    fn present(&self, snapshot: PlayerSnapshot);
-}

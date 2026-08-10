@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use stemplayer_domain::{DeviceId, ErrorCode, PlayerError};
+use stemplayer_domain::{ErrorCode, PlayerError};
 use stemplayer_format::{SelectedFile, SourceGroup};
 
 pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
@@ -16,10 +16,6 @@ const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 const MAX_SETTING_TEXT_CHARS: usize = 4_096;
 const MAX_LOCAL_SOURCE_ENTRIES: usize = 4_096;
 static NEXT_SETTINGS_TEMP: AtomicU64 = AtomicU64::new(1);
-
-pub trait PlatformPort: Send + Sync {
-    fn default_device(&self) -> Result<Option<DeviceId>, PlayerError>;
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppPaths {
@@ -570,16 +566,6 @@ pub enum OpenSelection {
     StemContainer(PathBuf),
     StudioManifest(PathBuf),
     StudioFolder(PathBuf),
-}
-
-pub trait NativeDialogs: Send + Sync {
-    fn open_source(&self) -> Result<Option<OpenSelection>, PlayerError>;
-    fn show_in_file_manager(&self, path: &Path) -> Result<(), PlayerError>;
-    fn confirm_cache_clear(&self) -> Result<bool, PlayerError>;
-}
-
-pub trait DropReceiver: Send + Sync {
-    fn receive_drop(&self, paths: &[PathBuf]) -> Result<Option<OpenSelection>, PlayerError>;
 }
 
 #[cfg(test)]

@@ -23,9 +23,3 @@ pub use manifest::{HlsManifest, HlsRole, HlsWaveform};
 pub use playlist::{MediaPlaylist, SegmentDescriptor};
 #[cfg(feature = "hls")]
 pub use source::{HlsDiagnostics, HlsPlaybackSource};
-
-use stemplayer_domain::{PlayerError, SourceLocator};
-
-pub trait NetworkService: Send + Sync {
-    fn validate_source(&self, source: &SourceLocator) -> Result<(), PlayerError>;
-}

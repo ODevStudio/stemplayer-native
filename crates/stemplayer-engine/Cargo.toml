@@ -8,8 +8,6 @@ publish = false
 
 [features]
 default = []
-fake-decoder = ["stemplayer-decode/fake-decoder"]
-fake-output = ["stemplayer-output/fake-output"]
 
 [dependencies]
 stemplayer-decode.workspace = true

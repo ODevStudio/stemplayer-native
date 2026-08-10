@@ -8,7 +8,6 @@ publish = false
 
 [features]
 default = []
-fake-output = []
 
 [dependencies]
 stemplayer-domain.workspace = true

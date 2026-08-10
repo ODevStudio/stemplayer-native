@@ -206,12 +206,6 @@ impl DeviceOutput {
     }
 }
 
-impl crate::OutputPort for DeviceOutput {
-    fn stop(&mut self) -> Result<(), PlayerError> {
-        self.pause()
-    }
-}
-
 struct DeviceEntry {
     report: DeviceReport,
     device: Device,

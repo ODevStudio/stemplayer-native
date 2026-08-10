@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
-use stemplayer_domain::{ErrorCode, PlayerError, SourceLocator};
+use stemplayer_domain::{ErrorCode, PlayerError};
 
 use crate::manifest::{
     HlsManifest, HlsRole, HlsWaveform, MAX_MANIFEST_BYTES, MAX_WAVEFORM_BYTES, invalid,
@@ -94,20 +94,6 @@ impl HlsClient {
             started.elapsed(),
         )
         .map(Arc::new)
-    }
-}
-
-impl crate::NetworkService for HlsClient {
-    fn validate_source(&self, source: &SourceLocator) -> Result<(), PlayerError> {
-        match source {
-            SourceLocator::HlsUrl(value) => {
-                entry_url(value.as_str(), self.allow_loopback_http).map(drop)
-            }
-            SourceLocator::LocalPath(_) => Err(PlayerError::new(
-                ErrorCode::FeatureUnsupported,
-                "Network service accepts only HLS URLs",
-            )),
-        }
     }
 }
 

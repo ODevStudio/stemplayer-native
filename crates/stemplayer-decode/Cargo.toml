@@ -10,7 +10,6 @@ publish = false
 default = []
 aac = []
 alac = []
-fake-decoder = []
 
 [dependencies]
 serde.workspace = true

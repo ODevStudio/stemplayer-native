@@ -14,21 +14,13 @@ product = [
     "aac",
     "alac",
     "hls",
-    "diagnostics-ui",
 ]
-product-windows = ["product", "windows-integration"]
-product-macos = ["product", "macos-integration"]
-product-linux = ["product", "linux-integration"]
 development = ["stemplayer-ui/development"]
 local-wav = ["stemplayer-format/local-wav"]
 local-mp4 = ["stemplayer-format/local-mp4"]
 aac = ["stemplayer-decode/aac", "local-mp4"]
 alac = ["stemplayer-decode/alac", "local-mp4"]
 hls = ["stemplayer-network/hls"]
-diagnostics-ui = ["stemplayer-ui/diagnostics-ui"]
-windows-integration = ["stemplayer-platform/windows-integration"]
-macos-integration = ["stemplayer-platform/macos-integration"]
-linux-integration = ["stemplayer-platform/linux-integration"]
 
 [dependencies]
 slint.workspace = true

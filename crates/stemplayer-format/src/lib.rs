@@ -10,8 +10,6 @@ mod mp4_tables;
 mod source;
 mod wav;
 
-use stemplayer_domain::{PlayerError, SourceLocator, SourceMetadata};
-
 pub use bundle::{
     HashStatus, StudioBundle, StudioBundleReport, StudioRole, StudioTrack, StudioTrackReport,
 };
@@ -27,7 +25,3 @@ pub use source::{
     BoundedReader, FileIdentity, MAX_RANGE_BYTES, SelectedFile, SourceGroup, safe_basename,
 };
 pub use wav::{SampleEncoding, WaveInfo, inspect_wave};
-
-pub trait SourceInspector: Send + Sync {
-    fn inspect(&self, source: &SourceLocator) -> Result<SourceMetadata, PlayerError>;
-}

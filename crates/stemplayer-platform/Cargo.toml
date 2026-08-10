@@ -6,12 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
-[features]
-default = []
-windows-integration = []
-macos-integration = []
-linux-integration = []
-
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
