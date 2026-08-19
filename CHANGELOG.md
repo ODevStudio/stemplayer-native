@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-19
+
+- Added the native Windows application icon and aligned its four stem bars with the product waveform colors.
+
 ## 2026-07-31
 
 - Added playlist append, bounded multi-selection, removal, context actions, and pointer reordering.

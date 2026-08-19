@@ -4,7 +4,7 @@ Current phase: Phase 11, operating-system integration, packaging, signing, and i
 
 Current status: blocked.
 
-The local player, mixer, waveform, diagnostics, and `stem-hls-v1` playback gates are complete. Phase 11 cannot advance until the product identity, publisher identity, application identifier, approved icon set, signing credentials, Windows packaging toolchain, and clean-system qualification environments are supplied.
+The local player, mixer, waveform, diagnostics, `stem-hls-v1` playback gates, and Windows icon set are complete. Phase 11 cannot advance until the product identity, publisher identity, application identifier, signing credentials, Windows packaging toolchain, and clean-system qualification environments are supplied.
 
 The first release remains Windows-qualified. macOS and Linux packaging are optional later platform expansions. Automatic updates remain disabled.
 
