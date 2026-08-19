@@ -118,7 +118,11 @@ impl PresentationModel {
                         format!(
                             "{} | {}",
                             state_text(snapshot.transport_state()),
-                            output_mode(details.mixer.output_preference, details.mixer.output_mode)
+                            output_mode(
+                                details.mixer.output_preference,
+                                details.mixer.output_mode,
+                                source.map(|value| value.kind),
+                            )
                         )
                     },
                     |diagnostics| {
@@ -178,7 +182,11 @@ impl PresentationModel {
                 muted: stem.muted,
                 solo: stem.solo,
             }),
-            output_mode: output_mode(details.mixer.output_preference, details.mixer.output_mode),
+            output_mode: output_mode(
+                details.mixer.output_preference,
+                details.mixer.output_mode,
+                source.map(|value| value.kind),
+            ),
             output_preference: match details.mixer.output_preference {
                 OutputPreference::Automatic => 0,
                 OutputPreference::MasterReference => 1,
@@ -273,14 +281,19 @@ fn gain_percent_text(gain: GainDb) -> String {
     format!("{}%", (gain.linear() * 100.0).round().max(1.0) as u16)
 }
 
-fn output_mode(preference: OutputPreference, mode: OutputMode) -> String {
+fn output_mode(
+    preference: OutputPreference,
+    mode: OutputMode,
+    source_kind: Option<SourceKind>,
+) -> String {
     let selection = match preference {
         OutputPreference::Automatic => "Automatic",
         OutputPreference::MasterReference | OutputPreference::StemMix => "Manual",
     };
-    let mode = match mode {
-        OutputMode::MasterReference => "Master reference",
-        OutputMode::StemMix => "Stem mix",
+    let mode = match (source_kind, mode) {
+        (Some(SourceKind::LocalAudioFile), OutputMode::StemMix) => "Stereo mix",
+        (_, OutputMode::MasterReference) => "Master reference",
+        (_, OutputMode::StemMix) => "Stem mix",
     };
     format!("{selection}: {mode}")
 }
@@ -388,6 +401,30 @@ mod tests {
     fn time_format_is_stable() {
         assert_eq!(format_time(Microseconds::new(-1)), "0:00");
         assert_eq!(format_time(Microseconds::new(65_999_999)), "1:05");
+    }
+
+    #[test]
+    fn ordinary_audio_presents_its_source_channels_and_stereo_output() {
+        let snapshot = PlayerSnapshot::new(
+            TransportState::Ready,
+            stemplayer_domain::GenerationId::INITIAL,
+            None,
+            Some(stemplayer_domain::SourceMetadata {
+                display_name: stemplayer_domain::DisplayName::new("demo.mp3").unwrap(),
+                kind: SourceKind::LocalAudioFile,
+                has_master: false,
+                sample_rate: stemplayer_domain::SampleRate::new(48_000).unwrap(),
+                channel_count: stemplayer_domain::ChannelCount::new(2).unwrap(),
+                start_frame: stemplayer_domain::SourceFrame::new(0),
+                end_frame_exclusive: stemplayer_domain::SourceFrame::new(48_000),
+            }),
+            vec![],
+        )
+        .unwrap();
+        let model = PresentationModel::from_snapshot(&snapshot);
+
+        assert_eq!(model.source_summary, "Audio file | 48000 Hz | 2 channels");
+        assert_eq!(model.output_mode, "Automatic: Stereo mix");
     }
 
     #[test]

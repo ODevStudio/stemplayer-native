@@ -648,7 +648,7 @@ fn validate_parameters(
         .sample_rate
         .filter(|rate| {
             if ordinary {
-                (8_000..=96_000).contains(rate)
+                (8_000..=384_000).contains(rate)
             } else {
                 matches!(rate, 44_100 | 48_000)
             }
@@ -791,7 +791,7 @@ mod tests {
         let mut alac = AudioCodecParameters::new();
         alac.codec = CODEC_ID_ALAC;
         alac.sample_rate = Some(48_000);
-        alac.channels = aac.channels;
+        alac.channels = aac.channels.clone();
         alac.bits_per_sample = Some(24);
         alac.extra_data = Some(vec![0_u8; 24].into_boxed_slice());
         assert_eq!(
@@ -809,6 +809,22 @@ mod tests {
         alac.bits_per_sample = Some(12);
         assert_eq!(
             validate_parameters(8, None, &alac, false).unwrap_err().code,
+            ErrorCode::CodecConfigInvalid
+        );
+
+        let mut flac = AudioCodecParameters::new();
+        flac.codec = CODEC_ID_FLAC;
+        flac.sample_rate = Some(192_000);
+        flac.channels = aac.channels;
+        assert_eq!(
+            validate_parameters(9, None, &flac, true)
+                .unwrap()
+                .sample_rate,
+            192_000
+        );
+        flac.sample_rate = Some(384_001);
+        assert_eq!(
+            validate_parameters(9, None, &flac, true).unwrap_err().code,
             ErrorCode::CodecConfigInvalid
         );
     }

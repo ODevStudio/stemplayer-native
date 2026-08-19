@@ -46,5 +46,8 @@ rfd = { workspace = true, features = ["xdg-portal", "async-std"] }
 [build-dependencies]
 slint-build.workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "=3.0.11"
+
 [lints]
 workspace = true

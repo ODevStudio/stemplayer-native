@@ -49,7 +49,7 @@ impl PlaybackEngine {
         let ring = SynchronizedRing::new(
             config.maximum_frames,
             config.block_frames,
-            session.metadata().channel_count.get(),
+            session.channel_count_for_mixing(),
             session.generation(),
             start_frame,
         )?;
@@ -149,7 +149,7 @@ impl PlaybackEngine {
         if self.transport.state() != TransportState::Playing {
             return Ok(0);
         }
-        let channels = usize::from(self.session.metadata().channel_count.get());
+        let channels = usize::from(self.session.channel_count_for_mixing());
         let mut source = [0.0_f32; 10];
         let end = self.session.metadata().end_frame_exclusive.get() as u64;
         let mut rendered = 0;

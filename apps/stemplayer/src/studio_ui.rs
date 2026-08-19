@@ -690,14 +690,26 @@ fn present_waveform(app: &AppWindow, waveform: Option<&stemplayer_waveform::Wave
         })
         .map(|geometry| geometry.rows)
         .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
+    let band_scales = [1usize, 2, 3].map(|index| {
+        rows[index]
+            .iter()
+            .map(|peak| peak.maximum.max(0.0))
+            .fold(f32::EPSILON, f32::max)
+    });
     let colors = rows[0]
         .iter()
         .enumerate()
         .map(|(index, _)| {
             frequency_color(
-                rows[1].get(index).map_or(0.0, |peak| peak.maximum),
-                rows[2].get(index).map_or(0.0, |peak| peak.maximum),
-                rows[3].get(index).map_or(0.0, |peak| peak.maximum),
+                rows[1]
+                    .get(index)
+                    .map_or(0.0, |peak| peak.maximum.max(0.0) / band_scales[0]),
+                rows[2]
+                    .get(index)
+                    .map_or(0.0, |peak| peak.maximum.max(0.0) / band_scales[1]),
+                rows[3]
+                    .get(index)
+                    .map_or(0.0, |peak| peak.maximum.max(0.0) / band_scales[2]),
             )
         })
         .collect::<Vec<_>>();
@@ -727,17 +739,60 @@ fn present_waveform(app: &AppWindow, waveform: Option<&stemplayer_waveform::Wave
 
 fn frequency_color(low: f32, mid: f32, high: f32) -> Color {
     let low = low.max(0.0);
-    let mid = mid.max(0.0) * 1.5;
-    let high = high.max(0.0) * 3.0;
+    let mid = mid.max(0.0) * 1.15;
+    let high = high.max(0.0) * 1.8;
     let total = low + mid + high;
     if total <= f32::EPSILON {
-        return Color::from_rgb_u8(0, 167, 189);
+        return Color::from_rgb_u8(0, 120, 145);
     }
+
+    let low_weight = (low / total).powf(1.8);
+    let mid_weight = (mid / total).powf(1.8);
+    let high_weight = (high / total).powf(1.8);
+    let weight_total = low_weight + mid_weight + high_weight;
+    let spectral_position =
+        ((((mid_weight * 0.5 + high_weight) / weight_total) - 0.5) * 1.8 + 0.5).clamp(0.0, 1.0);
+    let rgb = spectral_palette(spectral_position);
+    let energy = (total * 2.0).sqrt().clamp(0.0, 1.0);
+    let brightness = 0.72 + energy * 0.28;
+
     Color::from_rgb_u8(
-        ((234.0 * low + 55.0 * mid) / total).round() as u8,
-        ((61.0 * low + 104.0 * mid + 222.0 * high) / total).round() as u8,
-        ((76.0 * low + 255.0 * mid + 181.0 * high) / total).round() as u8,
+        (rgb[0] * brightness).round() as u8,
+        (rgb[1] * brightness).round() as u8,
+        (rgb[2] * brightness).round() as u8,
     )
+}
+
+fn spectral_palette(position: f32) -> [f32; 3] {
+    if position < 0.22 {
+        mix_color([255.0, 72.0, 47.0], [255.0, 45.0, 130.0], position / 0.22)
+    } else if position < 0.48 {
+        mix_color(
+            [255.0, 45.0, 130.0],
+            [185.0, 70.0, 255.0],
+            (position - 0.22) / 0.26,
+        )
+    } else if position < 0.72 {
+        mix_color(
+            [185.0, 70.0, 255.0],
+            [57.0, 125.0, 255.0],
+            (position - 0.48) / 0.24,
+        )
+    } else {
+        mix_color(
+            [57.0, 125.0, 255.0],
+            [0.0, 205.0, 255.0],
+            (position - 0.72) / 0.28,
+        )
+    }
+}
+
+fn mix_color(start: [f32; 3], end: [f32; 3], position: f32) -> [f32; 3] {
+    [
+        start[0] + (end[0] - start[0]) * position,
+        start[1] + (end[1] - start[1]) * position,
+        start[2] + (end[2] - start[2]) * position,
+    ]
 }
 
 fn waveform_revision(
@@ -1114,6 +1169,18 @@ mod tests {
             playlist_height_transition(true, 310.0, 900.0, 298.0),
             (900.0, 310.0, 900.0)
         );
+    }
+
+    #[test]
+    fn frequency_color_uses_spectral_anchors() {
+        let bass = frequency_color(1.0, 0.0, 0.0).to_argb_u8();
+        assert_eq!((bass.red, bass.green, bass.blue), (255, 72, 47));
+
+        let high = frequency_color(0.0, 0.0, 1.0).to_argb_u8();
+        assert_eq!((high.red, high.green, high.blue), (0, 205, 255));
+
+        let quiet = frequency_color(0.0, 0.0, 0.0).to_argb_u8();
+        assert_eq!((quiet.red, quiet.green, quiet.blue), (0, 120, 145));
     }
 
     #[test]

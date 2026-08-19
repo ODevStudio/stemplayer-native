@@ -3,8 +3,8 @@ use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Indexing, Resampler};
 use stemplayer_domain::{ErrorCode, PlayerError, ResamplerSnapshot};
 
-const MINIMUM_DEVICE_RATE: u32 = 8_000;
-const MAXIMUM_DEVICE_RATE: u32 = 384_000;
+const MINIMUM_SAMPLE_RATE: u32 = 8_000;
+const MAXIMUM_SAMPLE_RATE: u32 = 384_000;
 const MAXIMUM_BUFFER_FRAMES: usize = 65_536;
 
 enum ResamplerKind {
@@ -42,8 +42,8 @@ impl PostMixResampler {
                 "Resampler rates and chunk size must be positive",
             ));
         }
-        if !matches!(input_rate, 44_100 | 48_000)
-            || !(MINIMUM_DEVICE_RATE..=MAXIMUM_DEVICE_RATE).contains(&output_rate)
+        if !(MINIMUM_SAMPLE_RATE..=MAXIMUM_SAMPLE_RATE).contains(&input_rate)
+            || !(MINIMUM_SAMPLE_RATE..=MAXIMUM_SAMPLE_RATE).contains(&output_rate)
         {
             return Err(PlayerError::new(
                 ErrorCode::FeatureUnsupported,
@@ -250,7 +250,12 @@ mod tests {
 
     #[test]
     fn qualified_rates_reach_the_exact_scaled_end() {
-        for (input_rate, output_rate) in [(44_100, 48_000), (48_000, 44_100), (48_000, 96_000)] {
+        for (input_rate, output_rate) in [
+            (44_100, 48_000),
+            (48_000, 44_100),
+            (48_000, 96_000),
+            (192_000, 48_000),
+        ] {
             let input = vec![StereoFrame::default(); input_rate as usize];
             let output = convert(input_rate, output_rate, &input);
             assert_eq!(output.len(), output_rate as usize);
@@ -302,6 +307,7 @@ mod tests {
     #[test]
     fn unqualified_rates_fail_before_buffer_allocation() {
         assert!(PostMixResampler::new(1, 48_000, 2_048, 1).is_err());
+        assert!(PostMixResampler::new(384_001, 48_000, 2_048, 1).is_err());
         assert!(PostMixResampler::new(48_000, 384_001, 2_048, 1).is_err());
     }
 }

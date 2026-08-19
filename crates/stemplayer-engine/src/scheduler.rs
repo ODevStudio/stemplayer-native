@@ -250,7 +250,7 @@ impl DecodeScheduler {
             }
             self.metrics.bytes_read = self.metrics.bytes_read.saturating_add(window.bytes_read);
         }
-        let channels = session.metadata().channel_count.get();
+        let channels = session.channel_count_for_mixing();
         let mut samples = Vec::with_capacity(frames as usize * usize::from(channels));
         for frame in 0..frames as usize {
             for decoder in decoders.iter() {
@@ -572,7 +572,7 @@ fn interleave(
     frames: u32,
     windows: &[StereoWindow],
 ) -> Result<SourceBlock, PlayerError> {
-    let channels = session.metadata().channel_count.get();
+    let channels = session.channel_count_for_mixing();
     let mut samples = Vec::with_capacity(frames as usize * usize::from(channels));
     for frame in 0..frames as usize {
         for window in windows {

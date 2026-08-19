@@ -245,6 +245,7 @@ struct PlaylistAnalysis {
     sources: Vec<PathBuf>,
     completed: Vec<bool>,
     active: Option<PlaylistAnalysisItem>,
+    progress_sources: Vec<PathBuf>,
 }
 
 struct PlaylistAnalysisItem {
@@ -256,6 +257,11 @@ struct PlaylistAnalysisItem {
 
 impl PlaylistAnalysis {
     fn replace(&mut self, sources: Vec<PathBuf>) {
+        let added = sources
+            .iter()
+            .filter(|source| !self.sources.iter().any(|existing| existing == *source))
+            .cloned()
+            .collect::<Vec<_>>();
         let active_source = self
             .active
             .as_ref()
@@ -279,6 +285,15 @@ impl PlaylistAnalysis {
             .active
             .take()
             .filter(|active| active.index < sources.len());
+        self.progress_sources = if added.is_empty() {
+            self.progress_sources
+                .iter()
+                .filter(|source| sources.iter().any(|item| item == *source))
+                .cloned()
+                .collect()
+        } else {
+            added
+        };
         self.sources = sources;
         self.completed = completed;
     }
@@ -299,6 +314,7 @@ impl PlaylistAnalysis {
     fn reset(&mut self) {
         self.completed.fill(false);
         self.active = None;
+        self.progress_sources = self.sources.clone();
     }
 
     fn next(&self) -> Option<usize> {
@@ -886,26 +902,51 @@ impl WorkerState {
     fn refresh_playlist_progress(&self, shared: &Shared) {
         let progress = if !self.cache_enabled
             || self.cache.is_none()
-            || self.playlist_analysis.sources.is_empty()
+            || self.playlist_analysis.progress_sources.is_empty()
         {
             PLAYLIST_PROGRESS_HIDDEN
         } else {
             let completed = self
                 .playlist_analysis
-                .completed
+                .progress_sources
                 .iter()
-                .filter(|completed| **completed)
+                .filter(|source| {
+                    self.playlist_analysis
+                        .sources
+                        .iter()
+                        .position(|item| item == *source)
+                        .is_some_and(|index| self.playlist_analysis.completed[index])
+                })
                 .count();
-            if completed == self.playlist_analysis.sources.len() {
+            if completed == self.playlist_analysis.progress_sources.len() {
                 PLAYLIST_PROGRESS_HIDDEN
             } else {
                 let active_progress =
                     self.playlist_analysis
                         .active
                         .as_ref()
+                        .filter(|active| {
+                            self.playlist_analysis
+                                .sources
+                                .get(active.index)
+                                .is_some_and(|source| {
+                                    self.playlist_analysis
+                                        .progress_sources
+                                        .iter()
+                                        .any(|item| item == source)
+                                })
+                        })
                         .map(|active| active.progress)
                         .or_else(|| {
                             let source = self.current_source.as_ref()?;
+                            if !self
+                                .playlist_analysis
+                                .progress_sources
+                                .iter()
+                                .any(|item| item == source)
+                            {
+                                return None;
+                            }
                             let index = self
                                 .playlist_analysis
                                 .sources
@@ -923,7 +964,7 @@ impl WorkerState {
                         })
                         .unwrap_or(0.0);
                 (((completed as f32 + active_progress)
-                    / self.playlist_analysis.sources.len() as f32)
+                    / self.playlist_analysis.progress_sources.len() as f32)
                     * 100.0)
                     .floor()
                     .clamp(0.0, 99.0) as u8

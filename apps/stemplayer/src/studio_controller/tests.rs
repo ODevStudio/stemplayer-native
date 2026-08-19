@@ -70,6 +70,20 @@ fn playlist_reorder_preserves_completed_analysis() {
 }
 
 #[test]
+fn playlist_progress_tracks_only_new_sources() {
+    let first = PathBuf::from("first.mp3");
+    let second = PathBuf::from("second.mp3");
+    let third = PathBuf::from("third.mp3");
+    let mut analysis = PlaylistAnalysis::default();
+    analysis.replace(vec![first.clone(), second.clone()]);
+    analysis.completed = vec![true, true];
+
+    analysis.replace(vec![first, second, third.clone()]);
+
+    assert_eq!(analysis.progress_sources, vec![third]);
+}
+
+#[test]
 fn shutdown_bypasses_a_full_command_queue() {
     let controller = StudioController::new();
     for _ in 0..COMMAND_CAPACITY {

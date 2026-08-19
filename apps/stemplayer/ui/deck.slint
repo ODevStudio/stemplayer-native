@@ -159,13 +159,13 @@ export component WaveformRow inherits Rectangle {
         x: tick * root.width / 8;
         width: 1px;
         height: root.height;
-        background: #ffffff12;
+        background: #ffffff0b;
     }
     Rectangle {
         y: root.height / 2;
         width: root.width;
         height: 1px;
-        background: #ffffff24;
+        background: #ffffff18;
     }
     for lower[index] in root.lower-peaks: Rectangle {
         x: index * root.width / root.lower-peaks.length;

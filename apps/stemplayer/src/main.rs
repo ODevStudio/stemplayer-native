@@ -57,11 +57,14 @@ fn main() -> Result<(), slint::PlatformError> {
     #[cfg(target_os = "windows")]
     {
         let weak = app.as_weak();
+        let icon = app.get_app_icon();
         let position = settings.window_x.zip(settings.window_y);
         let first_start = settings.window_width.is_none() || settings.window_height.is_none();
         let maximized = settings.window_maximized;
         slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
             if let Some(app) = weak.upgrade() {
+                app.set_app_icon(slint::Image::default());
+                app.set_app_icon(icon);
                 initialize_window(&app, position, first_start, maximized);
             }
         });

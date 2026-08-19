@@ -148,6 +148,7 @@ impl PlaybackSession {
 
     pub fn open_audio(path: &Path, generation: GenerationId) -> Result<Self, PlayerError> {
         let info = inspect_audio_file(path)?;
+        let channel_count = info.channels;
         let sample_rate = SampleRate::new(info.sample_rate)?;
         let frames = info.declared_frames.unwrap();
         let end_frame = SourceFrame::new(i64::try_from(frames).unwrap());
@@ -165,7 +166,7 @@ impl PlaybackSession {
                 kind: SourceKind::LocalAudioFile,
                 has_master: false,
                 sample_rate,
-                channel_count: ChannelCount::new(8)?,
+                channel_count: ChannelCount::new(channel_count)?,
                 start_frame: SourceFrame::new(0),
                 end_frame_exclusive: end_frame,
             },
@@ -214,6 +215,13 @@ impl PlaybackSession {
 
     pub const fn metadata(&self) -> &SourceMetadata {
         &self.metadata
+    }
+
+    pub(crate) const fn channel_count_for_mixing(&self) -> u8 {
+        match self.metadata.kind {
+            SourceKind::LocalAudioFile => 8,
+            _ => self.metadata.channel_count.get(),
+        }
     }
 
     pub const fn duration(&self) -> Microseconds {

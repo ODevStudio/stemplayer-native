@@ -4,6 +4,8 @@ import { GainFader, StemDeckRow, VerticalGainFader, WaveformRow } from "deck.sli
 import { IconButton, PlaylistPanel, PlaylistRow } from "chrome.slint";
 export component AppWindow inherits Window {
     title: "Stemplayer Native";
+    in-out property <image> app-icon: @image-url("../assets/stemplayer.png");
+    icon: root.app-icon;
     preferred-width: 780px;
     preferred-height: 620px;
     min-width: 560px;
@@ -274,9 +276,9 @@ export component AppWindow inherits Window {
         }
 
         Rectangle {
-            min-height: 24px;
-            preferred-height: 24px;
-            max-height: 24px;
+            min-height: 28px;
+            preferred-height: 28px;
+            max-height: 28px;
             background: Palette.alternate-background;
             accessible-role: groupbox;
             accessible-label: root.state-text
@@ -398,7 +400,7 @@ export component AppWindow inherits Window {
                     role-name: "Audio";
                     lower-peaks: root.drums-wave-min;
                     upper-peaks: root.drums-wave-max;
-                    peak-color: #00a7bd;
+                    peak-color: #007891;
                     peak-colors: root.ordinary-wave-colors;
                 }
                 if !root.ordinary-audio: Rectangle {
