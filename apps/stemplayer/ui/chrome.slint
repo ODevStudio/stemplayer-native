@@ -4,6 +4,7 @@ export component IconButton inherits Rectangle {
     in property <string> glyph;
     in property <string> label;
     in property <bool> enabled: true;
+    in property <bool> active: false;
     callback clicked();
     width: 34px;
     height: 32px;
@@ -26,6 +27,13 @@ export component IconButton inherits Rectangle {
         color: root.enabled ? Palette.foreground : Palette.foreground.with-alpha(0.4);
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+    if root.active: Rectangle {
+        x: 8px;
+        y: parent.height - 3px;
+        width: parent.width - 16px;
+        height: 2px;
+        background: Palette.accent-background;
     }
     Tooltip { text: @markdown("\{root.label}"); }
 }

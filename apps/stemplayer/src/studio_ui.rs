@@ -8,8 +8,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use stemplayer_domain::{
-    BoundedText, CacheCommand, DeviceId, OutputPreference, PlayerCommand, PlayerController,
-    PlayerError, SnapshotSubscription, SourceFrame, SourceLocator, StemRole, TransportState,
+    BoundedText, CacheCommand, DeviceId, ErrorCategory, OutputPreference, PlayerCommand,
+    PlayerController, PlayerError, SnapshotSubscription, SourceFrame, SourceLocator, StemRole,
+    TransportState,
 };
 use stemplayer_ui::{CommandAdapter, Playhead};
 
@@ -295,6 +296,57 @@ pub fn wire(
             submit_playlist_source(&current, path, true);
         }
     });
+
+    let weak = app.as_weak();
+    let current = Arc::clone(&controller);
+    let current_playlist = Arc::clone(&playlist);
+    let current_settings = settings_path.clone();
+    app.on_previous_track(move || {
+        let path = current_playlist
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .previous()
+            .map(|(_, path)| path);
+        if let Some(path) = path {
+            present_playlist(&weak, &current_playlist);
+            persist_playlist(current_settings.as_deref(), &current_playlist);
+            submit_playlist_source(&current, path, true);
+        }
+    });
+
+    let weak = app.as_weak();
+    let current = Arc::clone(&controller);
+    let current_playlist = Arc::clone(&playlist);
+    let current_settings = settings_path.clone();
+    app.on_next_track(move || {
+        let path = current_playlist
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next()
+            .map(|(_, path)| path);
+        if let Some(path) = path {
+            present_playlist(&weak, &current_playlist);
+            persist_playlist(current_settings.as_deref(), &current_playlist);
+            submit_playlist_source(&current, path, true);
+        }
+    });
+
+    let current_playlist = Arc::clone(&playlist);
+    app.on_shuffle_changed(move |enabled| {
+        current_playlist
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_shuffle(enabled);
+    });
+
+    let current_playlist = Arc::clone(&playlist);
+    app.on_repeat_changed(move |enabled| {
+        current_playlist
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_repeat(enabled);
+    });
+
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
     let current_settings = settings_path.clone();
@@ -587,16 +639,36 @@ pub fn wire(
             let snapshot = receive_snapshot(&subscription, Duration::from_secs(60));
             let closed = snapshot.transport_state() == TransportState::Closed;
             let finished = quit_on_end && snapshot.transport_state() == TransportState::Ended;
-            let next = if !quit_on_end
+            let active_source = current_playlist
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active_source();
+            let source_error = playlist_source_error(
+                &snapshot,
+                active_source
+                    .as_deref()
+                    .is_some_and(|path| waveform_controller.current_source_is(path)),
+            );
+            let ended = !quit_on_end
                 && previous_state != TransportState::Ended
-                && snapshot.transport_state() == TransportState::Ended
-            {
-                current_playlist
+                && snapshot.transport_state() == TransportState::Ended;
+            let (next, skip_notice) = if let Some(error) = source_error {
+                let next = current_playlist
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .next()
+                    .next_after_error();
+                let notice = next.as_ref().map(|_| format!("Skipped track: {error}"));
+                (next, notice)
+            } else if ended {
+                (
+                    current_playlist
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .next(),
+                    None,
+                )
             } else {
-                None
+                (None, None)
             };
             previous_state = snapshot.transport_state();
             if next.is_some() {
@@ -626,7 +698,20 @@ pub fn wire(
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .update(&snapshot, epoch.elapsed());
-                    present(&app, &snapshot);
+                    if let Some(notice) = skip_notice {
+                        let notice = SharedString::from(notice);
+                        app.set_skip_notice(notice.clone());
+                        let weak = app.as_weak();
+                        Timer::single_shot(Duration::from_secs(4), move || {
+                            if let Some(app) = weak.upgrade()
+                                && app.get_skip_notice() == notice
+                            {
+                                app.set_skip_notice("".into());
+                            }
+                        });
+                    } else {
+                        present(&app, &snapshot);
+                    }
                     if waveform_changed {
                         present_waveform(&app, waveform.as_ref());
                     }
@@ -761,6 +846,17 @@ fn frequency_color(low: f32, mid: f32, high: f32) -> Color {
         (rgb[1] * brightness).round() as u8,
         (rgb[2] * brightness).round() as u8,
     )
+}
+
+fn playlist_source_error(
+    snapshot: &stemplayer_domain::PlayerSnapshot,
+    current_playlist_source: bool,
+) -> Option<String> {
+    (current_playlist_source && snapshot.transport_state() == TransportState::Error)
+        .then_some(snapshot.details().error.as_ref())
+        .flatten()
+        .filter(|error| error.category == ErrorCategory::Source)
+        .map(|error| error.summary.to_string())
 }
 
 fn spectral_palette(position: f32) -> [f32; 3] {
@@ -1209,6 +1305,28 @@ mod tests {
         );
         assert_eq!(model.error_action, "Choose supported stem files");
         assert_eq!(model.error_code, "E_MANIFEST_INVALID");
+    }
+
+    #[test]
+    fn playlist_source_errors_are_skipped_but_internal_errors_are_not() {
+        let source_error = playlist_error_snapshot(
+            stemplayer_domain::PlayerSnapshot::empty(TransportState::Error),
+            PlayerError::new(
+                stemplayer_domain::ErrorCode::CodecUnsupported,
+                "Codec is unsupported",
+            ),
+        );
+        let internal_error = playlist_error_snapshot(
+            stemplayer_domain::PlayerSnapshot::empty(TransportState::Error),
+            PlayerError::new(stemplayer_domain::ErrorCode::Internal, "Internal failure"),
+        );
+
+        assert_eq!(
+            playlist_source_error(&source_error, true).as_deref(),
+            Some("Codec is unsupported")
+        );
+        assert_eq!(playlist_source_error(&source_error, false), None);
+        assert_eq!(playlist_source_error(&internal_error, true), None);
     }
 
     #[test]

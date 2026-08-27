@@ -41,6 +41,7 @@ rust-version = "1.97"
 
 [workspace.dependencies]
 cpal = { version = "=0.18.1", features = ["realtime"] }
+fastrand = "=2.5.0"
 rtrb = "=0.3.4"
 rfd = { version = "=0.15.4", default-features = false }
 rubato = "=4.0.0"

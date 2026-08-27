@@ -30,6 +30,7 @@ fn playlist_inspection_preserves_cancellation() {
     let shared = Shared {
         snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
         waveform: RwLock::new(None),
+        current_source: RwLock::new(None),
         subscribers: Mutex::new(Vec::new()),
         command_admission: Mutex::new(()),
         cancel: Arc::new(AtomicBool::new(true)),
@@ -70,6 +71,31 @@ fn playlist_reorder_preserves_completed_analysis() {
 }
 
 #[test]
+fn playlist_checks_all_cache_entries_before_analyzing_misses() {
+    let mut analysis = PlaylistAnalysis::default();
+    analysis.replace(vec!["first.mp3".into(), "second.mp3".into()]);
+    analysis.checked[0] = true;
+
+    assert_eq!(analysis.next(), Some(1));
+    analysis.checked[1] = true;
+    assert_eq!(analysis.next(), Some(0));
+}
+
+#[test]
+fn failed_playlist_items_do_not_count_as_cached_or_retry_forever() {
+    let mut analysis = PlaylistAnalysis::default();
+    analysis.replace(vec!["failed.mp3".into(), "cached.mp3".into()]);
+    analysis.failed[0] = true;
+    analysis.checked[0] = true;
+    analysis.completed[1] = true;
+    analysis.checked[1] = true;
+
+    assert_eq!(analysis.next(), None);
+    assert!(!analysis.pending());
+    assert_eq!(analysis.completed, vec![false, true]);
+}
+
+#[test]
 fn playlist_progress_tracks_only_new_sources() {
     let first = PathBuf::from("first.mp3");
     let second = PathBuf::from("second.mp3");
@@ -103,6 +129,7 @@ fn failed_invalidating_admission_does_not_cancel_or_advance_epoch() {
     let shared = Arc::new(Shared {
         snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
         waveform: RwLock::new(None),
+        current_source: RwLock::new(None),
         subscribers: Mutex::new(Vec::new()),
         command_admission: Mutex::new(()),
         cancel: Arc::new(AtomicBool::new(false)),
@@ -139,6 +166,7 @@ fn older_playlist_command_preserves_newer_cancellation() {
     let shared = Arc::new(Shared {
         snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
         waveform: RwLock::new(None),
+        current_source: RwLock::new(None),
         subscribers: Mutex::new(Vec::new()),
         command_admission: Mutex::new(()),
         cancel: Arc::new(AtomicBool::new(true)),

@@ -55,6 +55,7 @@ export component AppWindow inherits Window {
     in property <string> error-code: "";
     in property <string> error-status: "";
     in property <string> error-details: "";
+    in-out property <string> skip-notice: "";
     in-out property <bool> error-details-visible: false;
     in property <bool> can-open: true;
     in property <bool> can-play: false;
@@ -80,6 +81,8 @@ export component AppWindow inherits Window {
     in-out property <float> seek-position: 0;
     in-out property <bool> diagnostics-visible: false;
     in-out property <bool> settings-visible: false;
+    in-out property <bool> shuffle-enabled: false;
+    in-out property <bool> repeat-enabled: false;
     in property <string> diagnostics-text: "";
     in property <string> diagnostics-export-status: "";
     in-out property <bool> window-minimized <=> root.minimized;
@@ -102,6 +105,10 @@ export component AppWindow inherits Window {
     callback play();
     callback pause();
     callback stop();
+    callback previous-track();
+    callback next-track();
+    callback shuffle-changed(bool);
+    callback repeat-changed(bool);
     callback seek(float);
     callback set-gain(int, float);
     callback commit-commands();
@@ -227,16 +234,36 @@ export component AppWindow inherits Window {
             }
             Rectangle { width: 8px; }
             IconButton {
+                glyph: "\u{E8B1}";
+                label: root.shuffle-enabled ? "Disable shuffle" : "Enable shuffle";
+                enabled: root.playlist-items.length > 1;
+                active: root.shuffle-enabled;
+                clicked => { root.shuffle-enabled = !root.shuffle-enabled; root.shuffle-changed(root.shuffle-enabled); }
+            }
+            IconButton {
+                glyph: "\u{E892}";
+                label: "Previous track";
+                enabled: root.playlist-items.length > 1;
+                clicked => { root.previous-track(); }
+            }
+            IconButton {
                 glyph: root.can-pause ? "\u{E769}" : "\u{E768}";
                 label: root.can-pause ? "Pause" : "Play";
                 enabled: root.can-pause || root.can-play || root.playlist-items.length > 0;
                 clicked => { if root.can-pause { root.pause(); } else { root.play(); } }
             }
             IconButton {
-                glyph: "\u{E72C}";
-                label: root.ordinary-audio ? "Reset volume" : "Reset mixer";
-                enabled: root.can-mix;
-                clicked => { root.reset-mixer-controls(); root.reset-mix(); }
+                glyph: "\u{E893}";
+                label: "Next track";
+                enabled: root.playlist-items.length > 1;
+                clicked => { root.next-track(); }
+            }
+            IconButton {
+                glyph: "\u{E8EE}";
+                label: root.repeat-enabled ? "Disable playlist repeat" : "Enable playlist repeat";
+                enabled: root.playlist-items.length > 0;
+                active: root.repeat-enabled;
+                clicked => { root.repeat-enabled = !root.repeat-enabled; root.repeat-changed(root.repeat-enabled); }
             }
             Rectangle {
                 width: 104px;
@@ -251,19 +278,13 @@ export component AppWindow inherits Window {
                 }
             }
             Rectangle {
-                height: 32px;
                 horizontal-stretch: 1;
-                Text {
-                    y: 2px;
-                    width: parent.width;
-                    height: parent.height;
-                    text: root.source-name;
-                    font-size: 15px;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
+            }
+            IconButton {
+                glyph: "\u{E72C}";
+                label: root.ordinary-audio ? "Reset volume" : "Reset mixer";
+                enabled: root.can-mix;
+                clicked => { root.reset-mixer-controls(); root.reset-mix(); }
             }
             Button {
                 width: 40px;
@@ -275,7 +296,7 @@ export component AppWindow inherits Window {
             }
         }
 
-        Rectangle {
+        if root.diagnostics-visible: Rectangle {
             min-height: 28px;
             preferred-height: 28px;
             max-height: 28px;
@@ -327,6 +348,23 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+            }
+        }
+
+        if root.skip-notice != "": Rectangle {
+            height: 30px;
+            background: #66531d;
+            accessible-label: root.skip-notice;
+            accessible-role: groupbox;
+            Text {
+                x: 8px;
+                width: parent.width - 16px;
+                height: parent.height;
+                text: root.skip-notice;
+                color: white;
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
             }
         }
 

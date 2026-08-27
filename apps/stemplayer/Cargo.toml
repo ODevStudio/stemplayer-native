@@ -23,6 +23,7 @@ alac = ["stemplayer-decode/alac", "local-mp4"]
 hls = ["stemplayer-network/hls"]
 
 [dependencies]
+fastrand.workspace = true
 slint.workspace = true
 serde_json.workspace = true
 stemplayer-decode.workspace = true

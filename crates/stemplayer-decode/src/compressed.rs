@@ -17,6 +17,7 @@ use symphonia::core::codecs::audio::well_known::{
     CODEC_ID_PCM_S32LE, CODEC_ID_PCM_U8, CODEC_ID_VORBIS,
 };
 use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
+use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
@@ -33,6 +34,34 @@ const MAX_ENCODED_PACKET_BYTES: usize = 1024 * 1024;
 const MAX_DECODED_PACKET_FRAMES: u64 = 16_384;
 const MAX_CODEC_CONFIG_BYTES: usize = 64 * 1024;
 const AAC_SEEK_PREROLL_FRAMES: i64 = 2_048;
+const MP3_TERMINAL_PADDING_FRAMES: i64 = 1_152;
+const MAX_CONSECUTIVE_MP3_CONCEALMENT_SECONDS: u64 = 2;
+
+fn accepts_mp3_terminal_padding(
+    codec: CompressedCodec,
+    declared_frames: Option<u64>,
+    current: i64,
+    end: i64,
+) -> bool {
+    codec == CompressedCodec::Mp3
+        && declared_frames == u64::try_from(end).ok()
+        && end
+            .checked_sub(current)
+            .is_some_and(|frames| (1..=MP3_TERMINAL_PADDING_FRAMES).contains(&frames))
+}
+
+fn accepts_mp3_decode_concealment(
+    codec: CompressedCodec,
+    sample_rate: u32,
+    concealed_frames: u64,
+    frames: u64,
+) -> bool {
+    codec == CompressedCodec::Mp3
+        && (1..=MAX_DECODED_PACKET_FRAMES).contains(&frames)
+        && concealed_frames.checked_add(frames).is_some_and(|total| {
+            total <= u64::from(sample_rate).saturating_mul(MAX_CONSECUTIVE_MP3_CONCEALMENT_SECONDS)
+        })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -271,6 +300,7 @@ pub struct CompressedTrackDecoder {
     identity: CompressedFileIdentity,
     next_frame: Option<u64>,
     pending: Option<PendingDecoded>,
+    consecutive_concealed_frames: u64,
 }
 
 struct PendingDecoded {
@@ -313,6 +343,7 @@ impl CompressedTrackDecoder {
             identity,
             next_frame: None,
             pending: None,
+            consecutive_concealed_frames: 0,
         })
     }
 
@@ -342,6 +373,7 @@ impl CompressedTrackDecoder {
             identity,
             next_frame: None,
             pending: None,
+            consecutive_concealed_frames: 0,
         })
     }
 
@@ -419,6 +451,7 @@ impl CompressedTrackDecoder {
                 .map_err(|_| demux_error("Compressed track seek failed"))?;
             self.decoder.reset();
             self.pending = None;
+            self.consecutive_concealed_frames = 0;
             diagnostics.required_seek_frame = seek.required_ts.get();
             diagnostics.actual_seek_frame = seek.actual_ts.get();
         }
@@ -433,7 +466,24 @@ impl CompressedTrackDecoder {
                 ));
             }
             if self.pending.is_none() {
-                self.pending = Some(self.decode_next_packet(&mut diagnostics)?);
+                self.pending = self.decode_next_packet(&mut diagnostics)?;
+                if self.pending.is_none() {
+                    if accepts_mp3_terminal_padding(
+                        self.info.codec,
+                        self.info.declared_frames,
+                        current,
+                        end,
+                    ) {
+                        left.resize(requested_frames as usize, 0.0);
+                        right.resize(requested_frames as usize, 0.0);
+                        current = end;
+                        continue;
+                    }
+                    return Err(PlayerError::new(
+                        ErrorCode::EncodedSampleInvalid,
+                        "Compressed track ended before the requested frame",
+                    ));
+                }
             }
             let pending = self.pending.as_ref().unwrap();
             if pending.packet_end <= current {
@@ -509,18 +559,15 @@ impl CompressedTrackDecoder {
     fn decode_next_packet(
         &mut self,
         diagnostics: &mut CompressedDecodeDiagnostics,
-    ) -> Result<PendingDecoded, PlayerError> {
+    ) -> Result<Option<PendingDecoded>, PlayerError> {
         loop {
-            let packet = self
+            let Some(packet) = self
                 .format
                 .next_packet()
                 .map_err(|_| demux_error("Compressed packet read failed"))?
-                .ok_or_else(|| {
-                    PlayerError::new(
-                        ErrorCode::EncodedSampleInvalid,
-                        "Compressed track ended before the requested frame",
-                    )
-                })?;
+            else {
+                return Ok(None);
+            };
             if packet.track_id != self.info.track_id {
                 continue;
             }
@@ -539,13 +586,50 @@ impl CompressedTrackDecoder {
                         "Compressed packet timestamp overflowed",
                     )
                 })?;
-            let decoded = self.decoder.decode(&packet).map_err(|_| {
-                PlayerError::new(ErrorCode::DecodeFailed, "Audio packet decode failed")
-            })?;
-            diagnostics.packets_decoded = diagnostics.packets_decoded.saturating_add(1);
             diagnostics.encoded_bytes_read = diagnostics
                 .encoded_bytes_read
                 .saturating_add(packet.data.len() as u64);
+            let decoded = match self.decoder.decode(&packet) {
+                Ok(decoded) => decoded,
+                Err(SymphoniaError::DecodeError(_))
+                    if accepts_mp3_decode_concealment(
+                        self.info.codec,
+                        self.info.sample_rate,
+                        self.consecutive_concealed_frames,
+                        packet.dur.get(),
+                    ) =>
+                {
+                    let frames = packet.dur.get();
+                    self.consecutive_concealed_frames += frames;
+                    let packet_start = encoded_packet_start
+                        .checked_add_unsigned(packet.trim_start.get())
+                        .ok_or_else(|| {
+                            PlayerError::new(
+                                ErrorCode::EncodedSampleInvalid,
+                                "Audio packet trim timestamp overflowed",
+                            )
+                        })?;
+                    return Ok(Some(PendingDecoded {
+                        packet_start,
+                        packet_end,
+                        trim_start: 0,
+                        frames,
+                        interleaved: vec![
+                            0.0;
+                            usize::try_from(frames).unwrap()
+                                * usize::from(self.info.channels)
+                        ],
+                    }));
+                }
+                Err(_) => {
+                    return Err(PlayerError::new(
+                        ErrorCode::DecodeFailed,
+                        "Audio packet decode failed",
+                    ));
+                }
+            };
+            self.consecutive_concealed_frames = 0;
+            diagnostics.packets_decoded = diagnostics.packets_decoded.saturating_add(1);
             let frames = u64::try_from(decoded.frames()).unwrap();
             if frames > MAX_DECODED_PACKET_FRAMES
                 || matches!(
@@ -587,13 +671,13 @@ impl CompressedTrackDecoder {
                     0,
                 )
             };
-            return Ok(PendingDecoded {
+            return Ok(Some(PendingDecoded {
                 packet_start,
                 packet_end,
                 trim_start,
                 frames,
                 interleaved,
-            });
+            }));
         }
     }
 }
@@ -759,6 +843,62 @@ mod tests {
     use super::*;
     use std::fs;
     use symphonia::core::audio::{Channels, Position};
+
+    #[test]
+    fn mp3_terminal_padding_is_one_bounded_final_frame() {
+        assert!(accepts_mp3_terminal_padding(
+            CompressedCodec::Mp3,
+            Some(10_000),
+            8_848,
+            10_000
+        ));
+        assert!(!accepts_mp3_terminal_padding(
+            CompressedCodec::Mp3,
+            Some(10_000),
+            8_847,
+            10_000
+        ));
+        assert!(!accepts_mp3_terminal_padding(
+            CompressedCodec::Flac,
+            Some(10_000),
+            8_848,
+            10_000
+        ));
+        assert!(!accepts_mp3_terminal_padding(
+            CompressedCodec::Mp3,
+            Some(9_999),
+            8_848,
+            10_000
+        ));
+    }
+
+    #[test]
+    fn mp3_decode_concealment_is_bounded_to_two_seconds() {
+        assert!(accepts_mp3_decode_concealment(
+            CompressedCodec::Mp3,
+            44_100,
+            87_048,
+            1_152
+        ));
+        assert!(!accepts_mp3_decode_concealment(
+            CompressedCodec::Mp3,
+            44_100,
+            87_049,
+            1_152
+        ));
+        assert!(!accepts_mp3_decode_concealment(
+            CompressedCodec::Flac,
+            44_100,
+            0,
+            1_152
+        ));
+        assert!(!accepts_mp3_decode_concealment(
+            CompressedCodec::Mp3,
+            44_100,
+            0,
+            MAX_DECODED_PACKET_FRAMES + 1
+        ));
+    }
 
     #[test]
     fn codec_profile_rate_channels_and_bounds_are_enforced() {

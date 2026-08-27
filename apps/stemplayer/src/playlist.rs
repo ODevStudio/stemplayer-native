@@ -20,6 +20,10 @@ pub struct Playlist {
     focus: Option<usize>,
     anchor: Option<usize>,
     active: Option<usize>,
+    shuffle: bool,
+    repeat: bool,
+    remaining: Vec<usize>,
+    history: Vec<usize>,
 }
 
 impl Playlist {
@@ -41,6 +45,7 @@ impl Playlist {
             self.select(0, false, false);
             return self.activate(0);
         }
+        self.rebuild_shuffle();
         None
     }
 
@@ -71,6 +76,7 @@ impl Playlist {
             focus,
             anchor: focus,
             active: None,
+            ..Self::default()
         }
     }
 
@@ -102,6 +108,12 @@ impl Playlist {
             .and_then(|index| self.items.get(index))
             .and_then(|item| item.source.to_str())
             .map(str::to_owned)
+    }
+
+    pub fn active_source(&self) -> Option<PathBuf> {
+        self.active
+            .and_then(|index| self.items.get(index))
+            .map(|item| item.source.clone())
     }
 
     pub fn select(&mut self, index: usize, control: bool, shift: bool) -> bool {
@@ -144,6 +156,13 @@ impl Playlist {
     }
 
     pub fn activate(&mut self, index: usize) -> Option<PathBuf> {
+        let source = self.activate_index(index)?;
+        self.history.clear();
+        self.rebuild_shuffle();
+        Some(source)
+    }
+
+    fn activate_index(&mut self, index: usize) -> Option<PathBuf> {
         let source = self.items.get(index)?.source.clone();
         self.selected.clear();
         self.selected.insert(index);
@@ -164,9 +183,73 @@ impl Playlist {
     }
 
     pub fn next(&mut self) -> Option<(usize, PathBuf)> {
-        let index = self.active?.checked_add(1)?;
-        let source = self.activate(index)?;
+        self.next_with_repeat(self.repeat)
+    }
+
+    pub fn next_after_error(&mut self) -> Option<(usize, PathBuf)> {
+        self.next_with_repeat(false)
+    }
+
+    fn next_with_repeat(&mut self, repeat: bool) -> Option<(usize, PathBuf)> {
+        let active = self.active?;
+        let index = if self.shuffle {
+            if self.remaining.is_empty() && repeat {
+                self.rebuild_shuffle();
+            }
+            self.remaining
+                .pop()
+                .or_else(|| (repeat && self.items.len() == 1).then_some(active))?
+        } else {
+            active
+                .checked_add(1)
+                .filter(|index| *index < self.items.len())
+                .or_else(|| repeat.then_some(0))?
+        };
+        if index != active {
+            self.history.push(active);
+        }
+        let source = self.activate_index(index)?;
         Some((index, source))
+    }
+
+    pub fn previous(&mut self) -> Option<(usize, PathBuf)> {
+        let active = self.active?;
+        let index = if self.shuffle {
+            let index = self.history.pop()?;
+            if !self.remaining.contains(&active) {
+                self.remaining.push(active);
+            }
+            index
+        } else {
+            active
+                .checked_sub(1)
+                .or_else(|| self.repeat.then(|| self.items.len() - 1))?
+        };
+        let source = self.activate_index(index)?;
+        Some((index, source))
+    }
+
+    pub fn set_shuffle(&mut self, enabled: bool) {
+        if self.shuffle != enabled {
+            self.shuffle = enabled;
+            self.history.clear();
+            self.rebuild_shuffle();
+        }
+    }
+
+    pub fn set_repeat(&mut self, enabled: bool) {
+        self.repeat = enabled;
+    }
+
+    fn rebuild_shuffle(&mut self) {
+        self.remaining = if self.shuffle {
+            (0..self.items.len())
+                .filter(|index| Some(*index) != self.active)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        fastrand::shuffle(&mut self.remaining);
     }
 
     pub fn remove_selected(&mut self) -> bool {
@@ -198,6 +281,8 @@ impl Playlist {
             self.selected.extend(next);
             self.active = active;
         }
+        self.history.clear();
+        self.rebuild_shuffle();
         true
     }
 
@@ -222,6 +307,8 @@ impl Playlist {
         self.focus = self.focus.map(remap);
         self.anchor = self.anchor.map(remap);
         self.active = self.active.map(remap);
+        self.history.clear();
+        self.rebuild_shuffle();
         true
     }
 }
@@ -527,6 +614,31 @@ mod tests {
         );
         assert_eq!(playlist.activate_selected_if_changed(), None);
     }
+
+    #[test]
+    fn playlist_navigation_supports_previous_repeat_and_shuffle() {
+        let mut playlist = Playlist::default();
+        playlist.append((0..4).map(item).collect());
+        playlist.activate(1);
+
+        assert_eq!(playlist.previous(), Some((0, item(0).source)));
+        assert_eq!(playlist.previous(), None);
+        playlist.set_repeat(true);
+        assert_eq!(playlist.previous(), Some((3, item(3).source)));
+        assert_eq!(playlist.next(), Some((0, item(0).source)));
+        playlist.activate(3);
+        assert_eq!(playlist.next_after_error(), None);
+        playlist.activate(0);
+
+        playlist.set_repeat(false);
+        playlist.set_shuffle(true);
+        let shuffled = (0..3)
+            .map(|_| playlist.next().unwrap().0)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(shuffled, BTreeSet::from([1, 2, 3]));
+        assert_eq!(playlist.next(), None);
+    }
+
     fn item(index: usize) -> PlaylistItem {
         PlaylistItem {
             label: format!("Track {index}"),

@@ -49,6 +49,7 @@ struct QueuedCommand {
 struct Shared {
     snapshot: RwLock<PlayerSnapshot>,
     waveform: RwLock<Option<WaveformSnapshot>>,
+    current_source: RwLock<Option<PathBuf>>,
     subscribers: Mutex<Vec<SnapshotPublisher>>,
     command_admission: Mutex<()>,
     cancel: Arc<AtomicBool>,
@@ -75,6 +76,7 @@ impl StudioController {
         let shared = Arc::new(Shared {
             snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
             waveform: RwLock::new(None),
+            current_source: RwLock::new(None),
             subscribers: Mutex::new(Vec::new()),
             command_admission: Mutex::new(()),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -99,6 +101,16 @@ impl StudioController {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    #[cfg(not(feature = "development"))]
+    pub fn current_source_is(&self, path: &Path) -> bool {
+        self.shared
+            .current_source
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_deref()
+            == Some(path)
     }
 
     pub fn playlist_cache_progress(&self) -> Option<u8> {
@@ -244,6 +256,8 @@ struct WorkerState {
 struct PlaylistAnalysis {
     sources: Vec<PathBuf>,
     completed: Vec<bool>,
+    checked: Vec<bool>,
+    failed: Vec<bool>,
     active: Option<PlaylistAnalysisItem>,
     progress_sources: Vec<PathBuf>,
 }
@@ -276,6 +290,24 @@ impl PlaylistAnalysis {
                     .is_some_and(|index| self.completed[index])
             })
             .collect();
+        let checked = sources
+            .iter()
+            .map(|source| {
+                self.sources
+                    .iter()
+                    .position(|existing| existing == source)
+                    .is_some_and(|index| self.completed[index] || self.checked[index])
+            })
+            .collect();
+        let failed = sources
+            .iter()
+            .map(|source| {
+                self.sources
+                    .iter()
+                    .position(|existing| existing == source)
+                    .is_some_and(|index| self.failed[index])
+            })
+            .collect();
         if let Some(active) = self.active.as_mut() {
             active.index = active_source
                 .and_then(|source| sources.iter().position(|item| *item == source))
@@ -296,11 +328,15 @@ impl PlaylistAnalysis {
         };
         self.sources = sources;
         self.completed = completed;
+        self.checked = checked;
+        self.failed = failed;
     }
 
     fn mark_source(&mut self, source: &Path) {
         if let Some(index) = self.sources.iter().position(|item| item == source) {
             self.completed[index] = true;
+            self.checked[index] = true;
+            self.failed[index] = false;
             if self
                 .active
                 .as_ref()
@@ -313,16 +349,30 @@ impl PlaylistAnalysis {
 
     fn reset(&mut self) {
         self.completed.fill(false);
+        self.checked.fill(false);
+        self.failed.fill(false);
         self.active = None;
         self.progress_sources = self.sources.clone();
     }
 
     fn next(&self) -> Option<usize> {
-        self.completed.iter().position(|completed| !completed)
+        self.checked
+            .iter()
+            .enumerate()
+            .position(|(index, checked)| !checked && !self.failed[index])
+            .or_else(|| {
+                self.completed
+                    .iter()
+                    .enumerate()
+                    .position(|(index, completed)| !completed && !self.failed[index])
+            })
     }
 
     fn pending(&self) -> bool {
-        self.completed.iter().any(|completed| !completed)
+        self.completed
+            .iter()
+            .enumerate()
+            .any(|(index, completed)| !completed && !self.failed[index])
     }
 }
 
@@ -530,6 +580,10 @@ impl WorkerState {
         );
         let path = Path::new(path);
         self.current_source = Some(path.to_path_buf());
+        *shared
+            .current_source
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(path.to_path_buf());
         if self
             .playlist_analysis
             .active
@@ -825,7 +879,7 @@ impl WorkerState {
                 Ok(None) => {}
                 Err(_) => {
                     let index = active.index;
-                    self.playlist_analysis.completed[index] = true;
+                    self.playlist_analysis.failed[index] = true;
                     self.playlist_analysis.active = None;
                 }
             }
@@ -837,23 +891,32 @@ impl WorkerState {
             return Ok(());
         };
         let source = self.playlist_analysis.sources[index].clone();
+        let inspect_cache = !self.playlist_analysis.checked[index];
+        let mut cache_miss = false;
         let item: Result<Option<PlaylistAnalysisItem>, PlayerError> = (|| {
             let session = open_local_session(&source, GenerationId::INITIAL, &shared.cancel)?;
             let fingerprint = waveform_fingerprint(&session)?;
             let metadata = session.metadata().clone();
             let config = session.buffer_config();
-            let cached = self.cache.as_ref().map(|cache| {
-                cache.load(
-                    fingerprint,
-                    GenerationId::INITIAL,
-                    metadata.sample_rate,
-                    metadata.start_frame..metadata.end_frame_exclusive,
-                )
-            });
+            let cached = inspect_cache
+                .then_some(self.cache.as_ref())
+                .flatten()
+                .map(|cache| {
+                    cache.load(
+                        fingerprint,
+                        GenerationId::INITIAL,
+                        metadata.sample_rate,
+                        metadata.start_frame..metadata.end_frame_exclusive,
+                    )
+                });
             let cache_status = cached
                 .as_ref()
-                .map_or(CacheStatus::Disabled, |result| result.status);
+                .map_or(CacheStatus::Miss, |result| result.status);
             if cached.and_then(|result| result.snapshot).is_some() {
+                return Ok(None);
+            }
+            if inspect_cache {
+                cache_miss = true;
                 return Ok(None);
             }
             let engine = PlaybackEngine::new(session)?;
@@ -875,7 +938,15 @@ impl WorkerState {
         match item {
             Ok(Some(item)) => self.playlist_analysis.active = Some(item),
             Err(error) if error.code == ErrorCode::BundleAborted => return Err(error),
-            Ok(None) | Err(_) => self.playlist_analysis.completed[index] = true,
+            Ok(None) if cache_miss => self.playlist_analysis.checked[index] = true,
+            Ok(None) => {
+                self.playlist_analysis.completed[index] = true;
+                self.playlist_analysis.checked[index] = true;
+            }
+            Err(_) => {
+                self.playlist_analysis.checked[index] = true;
+                self.playlist_analysis.failed[index] = true;
+            }
         }
         self.refresh_playlist_progress(shared);
         Ok(())

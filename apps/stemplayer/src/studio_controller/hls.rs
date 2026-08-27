@@ -16,6 +16,10 @@ impl WorkerState {
         self.analysis = None;
         self.fingerprint = None;
         self.current_source = None;
+        *shared
+            .current_source
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.hls = None;
         *shared
             .waveform

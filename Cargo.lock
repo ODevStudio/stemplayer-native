@@ -5022,6 +5022,7 @@ name = "stemplayer"
 version = "0.1.0"
 dependencies = [
  "embed-resource",
+ "fastrand",
  "rfd",
  "serde_json",
  "slint",
