@@ -20,6 +20,7 @@ on:
           - hls_playlist
           - hls_url_policy
           - settings
+          - waveform_cache
       fuzz_seconds:
         description: "Fuzzing time in seconds (10-300); ignored when target is none"
         required: true
@@ -91,7 +92,7 @@ jobs:
             -max_total_time="$FUZZ_SECONDS" \
             -timeout=5 \
             -rss_limit_mb=2048 \
-            -max_len=2097152
+            -max_len=4194304
 
   quality:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_target == 'none' }}
