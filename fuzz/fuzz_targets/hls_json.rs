@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use stemplayer_network::{HlsManifest, HlsWaveform};
 use url::Url;
 
-const MAX_INPUT: usize = 2 * 1024 * 1024;
+const MAX_INPUT: usize = 3 * 1024 * 1024;
 
 fuzz_target!(|data: &[u8]| {
     if data.len() > MAX_INPUT {
