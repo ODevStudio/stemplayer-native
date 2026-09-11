@@ -12,10 +12,12 @@ members = ["."]
 
 [dependencies]
 libfuzzer-sys = "=0.4.13"
+sha2 = "=0.10.9"
 stemplayer-domain = { path = "../crates/stemplayer-domain" }
 stemplayer-format = { path = "../crates/stemplayer-format", features = ["local-wav", "local-mp4"] }
 stemplayer-network = { path = "../crates/stemplayer-network", features = ["hls"] }
 stemplayer-platform = { path = "../crates/stemplayer-platform" }
+stemplayer-waveform = { path = "../crates/stemplayer-waveform" }
 unicode-normalization = "=0.1.25"
 url = "=2.5.8"
 
@@ -57,6 +59,13 @@ bench = false
 [[bin]]
 name = "settings"
 path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "waveform_cache"
+path = "fuzz_targets/waveform_cache.rs"
 test = false
 doc = false
 bench = false
