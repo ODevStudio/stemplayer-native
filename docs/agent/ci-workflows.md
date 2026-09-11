@@ -12,17 +12,23 @@ Workflow YAML, action SHAs, runner labels, and repository feature availability m
 - Windows CI includes an unsigned release-profile build of `stemplayer`.
 - Documentation and workflow integrity checks run before the Rust gates.
 
-## Pull request workflows
+## Pull request workflows and hosted-runner budget
 
-- Run documentation and workflow checks, formatting, workspace clippy, workspace tests, and explicit feature checks.
-- Use Ubuntu and Windows where platform compilation or behavior differs.
-- Set matrix `fail-fast: false`, safe Cargo caching, job timeouts, and `contents: read`.
-- Push CI should normally target `master` and deliberate release tags, avoiding duplicate feature-branch push and pull-request runs.
+The repository is maintained within a free GitHub-hosted Actions allowance, so routine pull requests minimize paid runner minutes without weakening the portable Rust gates.
+
+- Run documentation/workflow checks first, then one Ubuntu quality job with formatting, workspace clippy, workspace tests, product tests, explicit feature checks, a release build, support-command smoke coverage, and `cargo deny check`.
+- Pushes to `master` and deliberate release tags add Windows. Windows performs the same Rust gates plus unsigned release-evidence collection/verification.
+- macOS is optional Phase 12 coverage and runs only through explicit `workflow_dispatch` unless the supported-platform policy changes.
+- Use `workflow_dispatch` when a platform-sensitive pull request needs Windows or macOS evidence before merge and the hosted-runner budget permits it.
+- Keep matrix `fail-fast: false`, safe Cargo caching, job timeouts, and `contents: read`.
+- Do not run feature-branch push CI in addition to pull-request CI.
+
+This split is a CI-cost policy, not a qualification shortcut. A pull-request Ubuntu pass does not claim Windows, macOS, hardware, installer, signing, or clean-system qualification.
 
 ## Dependency policy
 
 - Review and commit the repository-specific `deny.toml` before making cargo-deny required.
-- Run `cargo deny check`.
+- Run `cargo deny check` in the Linux quality job rather than spending a separate hosted runner solely for dependency policy.
 - Keep a second advisory tool only when it provides distinct coverage.
 - Cache or install pinned tools deterministically.
 
