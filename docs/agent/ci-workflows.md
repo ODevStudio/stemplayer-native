@@ -19,11 +19,12 @@ The repository is maintained within a free GitHub-hosted Actions allowance, so r
 - Run documentation/workflow checks first, then one Ubuntu quality job with formatting, workspace clippy, workspace tests, product tests, explicit feature checks, a release build, support-command smoke coverage, and `cargo deny check`.
 - Pushes to `master` and deliberate release tags add Windows. Windows performs the same Rust gates plus unsigned release-evidence collection/verification.
 - macOS is optional Phase 12 coverage and runs only through explicit `workflow_dispatch` unless the supported-platform policy changes.
-- Use `workflow_dispatch` when a platform-sensitive pull request needs Windows or macOS evidence before merge and the hosted-runner budget permits it.
+- Coverage-guided fuzzing is also explicit `workflow_dispatch`: select one target and 10–300 seconds. That dispatch runs one Ubuntu fuzz worker and skips the normal platform matrix.
+- Use the normal `workflow_dispatch` mode when a platform-sensitive pull request needs Windows or macOS evidence before merge and the hosted-runner budget permits it.
 - Keep matrix `fail-fast: false`, safe Cargo caching, job timeouts, and `contents: read`.
 - Do not run feature-branch push CI in addition to pull-request CI.
 
-This split is a CI-cost policy, not a qualification shortcut. A pull-request Ubuntu pass does not claim Windows, macOS, hardware, installer, signing, or clean-system qualification.
+This split is a CI-cost policy, not a qualification shortcut. A pull-request Ubuntu pass does not claim Windows, macOS, hardware, installer, signing, clean-system, or long-run fuzz qualification.
 
 ## Dependency policy
 
@@ -38,11 +39,11 @@ The accepted license list matches the locked workspace graph, including Slint's 
 
 Enable dependency review, CodeQL, and required security rules only when they are available for this private repository and account. Do not add an unavailable service as a required gate.
 
-## Manual qualification workflow
+## Manual qualification and security workflows
 
-Use `workflow_dispatch` or an approved self-hosted Windows environment for hardware audio, NVDA/UI automation, long soaks, waveform/cache qualification, HLS/TLS qualification, installer, signing, and clean-system work.
+Use `workflow_dispatch` or an approved self-hosted Windows environment for hardware audio, NVDA/UI automation, long soaks, waveform/cache qualification, HLS/TLS qualification, installer, signing, and clean-system work. Coverage-guided parser fuzzing uses the same manual-dispatch principle because it is open-ended security work rather than an ordinary pull-request gate; see [Hostile-input fuzzing](../maintenance/fuzzing.md).
 
-Ordinary pull requests must not depend on audio hardware, interactive desktop state, signing credentials, private fixtures, or clean-machine infrastructure.
+Ordinary pull requests must not depend on audio hardware, interactive desktop state, signing credentials, private fixtures, clean-machine infrastructure, nightly Rust, or an unbounded fuzzing budget.
 
 ## Release boundary
 
