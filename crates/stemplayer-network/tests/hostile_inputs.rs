@@ -61,7 +61,7 @@ fn hostile_hls_json_mutations_fail_closed_without_panics() {
     let waveform = br#"{"schema":"stem-waveform-v1","samples_per_peak":256,"min":[-0.5,0.0],"max":[0.5,0.25]}"#;
     assert!(HlsWaveform::parse(waveform).is_ok());
 
-    for seed in [manifest_seed(), waveform.as_slice()] {
+    for seed in [manifest_seed(), &waveform[..]] {
         for round in 0..512 {
             let bytes = mutated(seed, round);
             let _ = HlsManifest::parse(&bytes, &base);
