@@ -27,12 +27,13 @@ jobs:
           pyflakes: false
       - name: Check repository documentation and workflow policy
         run: python scripts/check_repository.py
-      - name: Test repository checks
+      - name: Test repository checks and release tooling
         run: python -m unittest discover -s scripts -p "test_*.py"
       - name: Check whitespace
         run: git diff --check
 
   quality:
+    needs: workflow-integrity
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +58,18 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Remap private build paths
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          flags = []
+          for root, replacement in [(Path.home(), "/cargo-home"), (Path(os.environ["GITHUB_WORKSPACE"]), "/src")]:
+              for spelling in sorted({str(root), root.as_posix()}):
+                  flags.append(f"--remap-path-prefix={spelling}={replacement}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write("CARGO_ENCODED_RUSTFLAGS=" + chr(31).join(flags) + "\n")
+          PY
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -80,6 +93,28 @@ jobs:
         run: cargo test --locked -p stemplayer
       - name: Product release build
         run: cargo build --locked --release -p stemplayer
+      - name: Local-only native support smoke
+        run: |
+          mkdir -p artifacts/tmp
+          support=target/release/stemplayer-support
+          if [ "$RUNNER_OS" = "Windows" ]; then support="$support.exe"; fi
+          "$support" --build-info --output artifacts/tmp/build-info.json
+          "$support" --report --output artifacts/tmp/support-report.json
+          "$support" --benchmark --iterations 2 --output artifacts/tmp/support-benchmark.json
+      - name: Enforce unsigned Windows build evidence
+        if: runner.os == 'Windows'
+        run: |
+          target="$(python -c 'import json; print(json.load(open("artifacts/tmp/build-info.json"))["target"])')"
+          cargo metadata --locked --offline --format-version 1 \
+            --manifest-path apps/stemplayer/Cargo.toml --filter-platform "$target" \
+            > artifacts/tmp/release-cargo-metadata.json
+          python scripts/release_evidence.py collect \
+            --build-info artifacts/tmp/build-info.json \
+            --metadata artifacts/tmp/release-cargo-metadata.json \
+            --binary target/release/stemplayer.exe \
+            --support-binary target/release/stemplayer-support.exe \
+            --output artifacts/unsigned-build-evidence
+          python scripts/release_evidence.py verify artifacts/unsigned-build-evidence
       - name: UI startup smoke
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -93,6 +128,7 @@ jobs:
         run: cargo check --locked --workspace --all-features
 
   dependency-policy:
+    needs: workflow-integrity
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

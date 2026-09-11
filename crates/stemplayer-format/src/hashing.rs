@@ -7,6 +7,12 @@ use stemplayer_domain::{ErrorCode, PlayerError};
 
 const HASH_BLOCK_BYTES: usize = 64 * 1024;
 
+/// Hash a caller-bounded byte slice without file or network access.
+/// This shares the existing SHA-256 implementation with build/support evidence.
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HashProgress {
     pub file_index: usize,
@@ -46,4 +52,21 @@ pub fn verify_sha256(
         ));
     }
     Ok(reader.bytes_read())
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::sha256_bytes;
+
+    #[test]
+    fn sha256_matches_known_vectors() {
+        assert_eq!(
+            sha256_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

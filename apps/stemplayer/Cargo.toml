@@ -1,5 +1,6 @@
 [package]
 name = "stemplayer"
+default-run = "stemplayer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -45,7 +46,9 @@ rfd.workspace = true
 rfd = { workspace = true, features = ["xdg-portal", "async-std"] }
 
 [build-dependencies]
+serde_json.workspace = true
 slint-build.workspace = true
+stemplayer-format.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "=3.0.11"
