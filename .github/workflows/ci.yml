@@ -6,6 +6,25 @@ on:
     branches: [master]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      fuzz_target:
+        description: "Coverage-guided fuzz target; choose none for the normal platform matrix"
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - studio_manifest
+          - local_containers
+          - hls_json
+          - hls_playlist
+          - hls_url_policy
+          - settings
+      fuzz_seconds:
+        description: "Fuzzing time in seconds (10-300); ignored when target is none"
+        required: true
+        default: "60"
+        type: string
 
 permissions:
   contents: read
@@ -32,7 +51,50 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
+  fuzz:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.fuzz_target != 'none' }}
+    needs: workflow-integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout v4.2.2
+      - name: Install pinned fuzz toolchain
+        run: rustup toolchain install nightly-2026-09-01 --profile minimal
+      - name: Cache fuzz tooling and registry
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # actions/cache v4.2.4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-fuzz
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: cargo-fuzz-0.13.2-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.toml') }}
+      - name: Install pinned cargo-fuzz
+        run: |
+          if ! command -v cargo-fuzz >/dev/null 2>&1; then
+            cargo install --locked cargo-fuzz --version 0.13.2
+          fi
+      - name: Run bounded coverage-guided fuzzing
+        env:
+          FUZZ_TARGET: ${{ inputs.fuzz_target }}
+          FUZZ_SECONDS: ${{ inputs.fuzz_seconds }}
+        run: |
+          case "$FUZZ_SECONDS" in
+            ''|*[!0-9]*) echo "fuzz_seconds must be numeric" >&2; exit 2 ;;
+          esac
+          if [ "$FUZZ_SECONDS" -lt 10 ] || [ "$FUZZ_SECONDS" -gt 300 ]; then
+            echo "fuzz_seconds must be between 10 and 300" >&2
+            exit 2
+          fi
+          cd fuzz
+          cargo +nightly-2026-09-01 fuzz run "$FUZZ_TARGET" -- \
+            -max_total_time="$FUZZ_SECONDS" \
+            -timeout=5 \
+            -rss_limit_mb=2048 \
+            -max_len=2097152
+
   quality:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.fuzz_target == 'none' }}
     needs: workflow-integrity
     strategy:
       fail-fast: false
