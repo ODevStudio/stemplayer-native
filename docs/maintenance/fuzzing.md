@@ -14,8 +14,9 @@ This is security-testing infrastructure, not qualification evidence by itself. A
 | `hls_playlist` | Static VOD media-playlist parsing, durations, segment references, and timeline math |
 | `hls_url_policy` | Entry URL and child-reference scheme/origin/path policy using the production URL-policy source |
 | `settings` | Versioned local-settings loading and corrupt/oversized recovery |
+| `waveform_cache` | Waveform-cache binary decoding, both raw corruption and payloads with recomputed SHA-256 trailers |
 
-The ordinary workspace tests additionally mutate waveform-cache records, including inputs with recomputed SHA-256 trailers so decoding is exercised beyond the checksum gate.
+The ordinary workspace tests exercise the same boundary classes with deterministic mutation campaigns so parser hardening is covered on every normal all-feature test run.
 
 ## Local coverage-guided run
 
@@ -25,10 +26,10 @@ The ordinary workspace tests additionally mutate waveform-cache records, includi
 rustup toolchain install nightly-2026-09-01 --profile minimal
 cargo install --locked cargo-fuzz --version 0.13.2
 cd fuzz
-cargo +nightly-2026-09-01 fuzz run studio_manifest -- -max_total_time=60 -timeout=5 -rss_limit_mb=2048 -max_len=2097152
+cargo +nightly-2026-09-01 fuzz run studio_manifest -- -max_total_time=60 -timeout=5 -rss_limit_mb=2048 -max_len=4194304
 ```
 
-Replace `studio_manifest` with another target from the table. Keep ad-hoc runs bounded unless a dedicated machine and budget are available.
+Replace `studio_manifest` with another target from the table. Keep ad-hoc runs bounded unless a dedicated machine and budget are available. Individual targets apply stricter internal input caps where the production boundary is intentionally smaller.
 
 ## GitHub Actions budget
 
@@ -52,6 +53,6 @@ Do not attach private crash artifacts or raw machine paths to public issue text.
 
 ## Invariants
 
-Fuzz targets must keep input sizes explicit and bounded, must not make external network requests, and must not depend on audio hardware, UI state, signing credentials, or private fixtures. File-backed fuzz targets may use process-scoped temporary files because the production WAV/MP4 and settings contracts include filesystem identity and bounded regular-file checks.
+Fuzz targets must keep input sizes explicit and bounded, must not make external network requests, and must not depend on audio hardware, UI state, signing credentials, or private fixtures. File-backed fuzz targets may use process-scoped temporary files because the production WAV/MP4, settings, and cache contracts include filesystem identity and bounded regular-file checks.
 
 A new parser or untrusted serialization boundary should receive both a deterministic malformed-input regression layer and a coverage-guided target when the boundary can be exercised without unsafe external side effects.
