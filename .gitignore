@@ -4,3 +4,7 @@ __pycache__/
 /artifacts/*
 !/artifacts/README.md
 /artifacts/tmp/
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/target/
+/fuzz/Cargo.lock
