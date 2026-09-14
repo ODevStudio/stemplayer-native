@@ -95,10 +95,14 @@ def no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
-def read_json(path: Path, limit: int = MAX_JSON) -> dict:
-    value = json.loads(read_regular(path, limit), object_pairs_hook=no_duplicate_keys)
+def parse_json(data: bytes) -> dict:
+    value = json.loads(data, object_pairs_hook=no_duplicate_keys)
     require(isinstance(value, dict), "JSON object required")
     return value
+
+
+def read_json(path: Path, limit: int = MAX_JSON) -> dict:
+    return parse_json(read_regular(path, limit))
 
 
 def validate_identity(info: dict) -> None:
@@ -146,6 +150,36 @@ def check_source(root: Path, info: dict) -> None:
         digest(read_regular(root / "rust-toolchain.toml", 4096)) == info["toolchain_sha256"],
         "toolchain hash mismatch",
     )
+
+
+def cargo_metadata(root: Path, info: dict) -> dict:
+    """Regenerate target-filtered metadata so caller-supplied JSON cannot rewrite the graph."""
+    command = [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--manifest-path",
+        str(root / "apps" / "stemplayer" / "Cargo.toml"),
+        "--filter-platform",
+        info["target"],
+    ]
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            stdout=output,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        require(result.returncode == 0, "Cargo metadata unavailable")
+        output.seek(0)
+        data = output.read(MAX_JSON + 1)
+    require(len(data) <= MAX_JSON, "Cargo metadata size limit exceeded")
+    return parse_json(data)
 
 
 def package_ref(package: dict) -> str:
@@ -367,6 +401,16 @@ def scan_bytes(data: bytes, private_roots: tuple[str, ...] = ()) -> list[str]:
     return sorted(found)
 
 
+def scan_roots(private_roots: tuple[str, ...] = (), source_root: Path | None = None) -> tuple[str, ...]:
+    """Use reproducible caller roots plus the current workspace/home context by default."""
+    defaults = [str(Path.cwd().resolve()), str(Path.home().resolve())]
+    if source_root is not None:
+        defaults.append(str(source_root.resolve()))
+    roots = tuple(dict.fromkeys((*private_roots, *defaults)))
+    require(all(len(root) >= 4 for root in roots), "private-root marker is too short")
+    return roots
+
+
 def _bounded_entries(directory: Path, limit: int) -> list[Path]:
     entries = []
     for path in directory.iterdir():
@@ -440,7 +484,8 @@ def checksums(directory: Path) -> bytes:
 
 
 def verify(directory: Path, private_roots: tuple[str, ...] = ()) -> None:
-    generated_scan = scan_directory(directory, private_roots, require_complete=True)
+    markers = scan_roots(private_roots)
+    generated_scan = scan_directory(directory, markers, require_complete=True)
     stored_scan = read_json(directory / "artifact-scan.json", 64 * 1024)
     require(stored_scan == generated_scan, "artifact scan report mismatch")
     recorded = read_regular(directory / "SHA256SUMS", 16 * 1024)
@@ -494,8 +539,10 @@ def collect(
     info = read_json(info_path, 16 * 1024)
     validate_identity(info)
     check_source(root, info)
-    metadata = read_json(metadata_path)
-    require(Path(metadata["workspace_root"]).resolve() == root, "metadata workspace mismatch")
+    supplied_metadata = read_json(metadata_path)
+    require(Path(supplied_metadata["workspace_root"]).resolve() == root, "metadata workspace mismatch")
+    metadata = cargo_metadata(root, info)
+    require(metadata == supplied_metadata, "Cargo metadata mismatch")
     lock = tomllib.loads(read_regular(root / "Cargo.lock", MAX_JSON).decode())
     bom, notices = inventory(metadata, lock, root, info)
     info_bytes = canonical(info)
@@ -532,7 +579,7 @@ def collect(
             "notices_sha256": digest(notices),
         }
         (staging / "release-manifest.json").write_bytes(canonical(manifest))
-        markers = tuple(dict.fromkeys((*private_roots, str(root), str(Path.home()))))
+        markers = scan_roots(private_roots, root)
         report = scan_directory(staging, markers)
         (staging / "artifact-scan.json").write_bytes(canonical(report))
         (staging / "SHA256SUMS").write_bytes(checksums(staging))
