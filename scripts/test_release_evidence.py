@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest import mock
 
@@ -78,6 +79,15 @@ class EvidenceTests(unittest.TestCase):
             "packages": packages,
             "resolve": {"nodes": nodes, "root": "stemplayer"},
         }
+        self.authoritative_metadata = deepcopy(self.metadata)
+        self.real_cargo_metadata = evidence.cargo_metadata
+        metadata_generator = mock.patch.object(
+            evidence,
+            "cargo_metadata",
+            side_effect=lambda _root, _info: deepcopy(self.authoritative_metadata),
+        )
+        metadata_generator.start()
+        self.addCleanup(metadata_generator.stop)
         self.git("init", "-q")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
@@ -125,8 +135,10 @@ class EvidenceTests(unittest.TestCase):
             output or self.output,
         )
 
-    def save_metadata(self):
+    def save_metadata(self, authoritative=True):
         self.meta_path.write_bytes(evidence.canonical(self.metadata))
+        if authoritative:
+            self.authoritative_metadata = deepcopy(self.metadata)
 
     def test_collect_verify_and_repeat_are_deterministic(self):
         self.collect()
@@ -180,6 +192,41 @@ class EvidenceTests(unittest.TestCase):
     def test_license_text_is_required(self):
         (self.registry / "normal-0.1.0" / "LICENSE").unlink()
         with self.assertRaisesRegex(evidence.EvidenceError, "license text missing: normal"):
+            self.collect()
+
+    def test_cargo_metadata_is_regenerated_locked_offline_and_target_filtered(self):
+        expected = deepcopy(self.metadata)
+
+        def run(command, **kwargs):
+            kwargs["stdout"].write(evidence.canonical(expected))
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch("release_evidence.subprocess.run", side_effect=run) as invoked:
+            actual = self.real_cargo_metadata(self.root, self.info)
+        self.assertEqual(actual, expected)
+        command = invoked.call_args.args[0]
+        self.assertEqual(command[:2], ["cargo", "metadata"])
+        self.assertIn("--locked", command)
+        self.assertIn("--offline", command)
+        self.assertEqual(command[-2:], ["--filter-platform", self.info["target"]])
+        self.assertEqual(invoked.call_args.kwargs["cwd"], self.root)
+
+    def test_supplied_metadata_must_match_fresh_cargo_resolution(self):
+        self.metadata["resolve"]["nodes"][0]["deps"] = [
+            edge for edge in self.metadata["resolve"]["nodes"][0]["deps"] if edge["pkg"] != "normal"
+        ]
+        self.save_metadata(authoritative=False)
+        with self.assertRaisesRegex(evidence.EvidenceError, "Cargo metadata mismatch"):
+            self.collect()
+
+    def test_forged_registry_sibling_is_rejected_by_fresh_metadata_binding(self):
+        forged = self.cargo_home / "registry" / "src" / "forged-index" / "normal-0.1.0"
+        forged.mkdir(parents=True)
+        (forged / "Cargo.toml").write_text("[package]\n")
+        (forged / "LICENSE").write_text("forged redistribution text")
+        self.metadata["packages"][1]["manifest_path"] = str(forged / "Cargo.toml")
+        self.save_metadata(authoritative=False)
+        with self.assertRaisesRegex(evidence.EvidenceError, "Cargo metadata mismatch"):
             self.collect()
 
     def test_registry_manifest_path_cannot_exfiltrate_arbitrary_files(self):
@@ -277,6 +324,18 @@ class EvidenceTests(unittest.TestCase):
             "build-root",
             evidence.scan_bytes(b"prefix Z:\\agent\\work suffix", ("Z:/agent/work",)),
         )
+
+    def test_default_verification_roots_include_working_directory_and_home(self):
+        previous = Path.cwd()
+        os.chdir(self.root)
+        try:
+            roots = evidence.scan_roots()
+            self.assertIn(str(self.root.resolve()), roots)
+            self.assertIn(str(Path.home().resolve()), roots)
+            data = f"prefix {self.root.resolve()} suffix".encode()
+            self.assertIn("build-root", evidence.scan_bytes(data, roots))
+        finally:
+            os.chdir(previous)
 
     def test_tamper_is_rejected(self):
         self.collect()
