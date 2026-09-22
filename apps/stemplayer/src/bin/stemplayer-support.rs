@@ -53,7 +53,10 @@ fn benchmark(iterations: u32) -> Result<Value, &'static str> {
                 samples,
             )
             .map_err(|_| "synthetic block creation failed")?;
-            if !ring.publish(block).map_err(|_| "source-ring publish failed")? {
+            if !ring
+                .publish(block)
+                .map_err(|_| "source-ring publish failed")?
+            {
                 return Err("source-ring rejected a synthetic block");
             }
             for position in start..start + BLOCK_FRAMES {
@@ -116,7 +119,11 @@ fn write_report(value: &Value, destination: Option<PathBuf>) -> Result<(), &'sta
             .create_new(true)
             .open(&path)
             .map_err(|_| "could not create a new report file")?;
-        if file.write_all(&bytes).and_then(|()| file.sync_all()).is_err() {
+        if file
+            .write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .is_err()
+        {
             drop(file);
             let _ = fs::remove_file(path);
             return Err("report write failed");

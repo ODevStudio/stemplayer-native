@@ -20,9 +20,7 @@ fn build_windows_icon() {
     let identity_path = identity_path.to_string_lossy().replace('\\', "/");
     fs::write(
         &resource_path,
-        format!(
-            "#pragma code_page(65001)\n1 ICON \"{icon_path}\"\n2 RCDATA \"{identity_path}\"\n"
-        ),
+        format!("#pragma code_page(65001)\n1 ICON \"{icon_path}\"\n2 RCDATA \"{identity_path}\"\n"),
     )
     .expect("Windows resource file must be writable");
     embed_resource::compile(&resource_path, embed_resource::NONE)

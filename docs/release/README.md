@@ -33,6 +33,8 @@ Timings include sample generation, allocations, ring operations, comparisons, an
 
 Use a clean checkout, the pinned Rust toolchain, a default product release build, and Cargo metadata generated for that same build target and feature selection. CI shows the canonical path-remapping setup in [ci.yml](../../.github/workflows/ci.yml). Unmapped private build paths cause the content scan to fail.
 
+Collection requires actual license texts for every inventoried dependency. A registry package's SPDX declaration is not a substitute for its notices. Some locked packages, including `accesskit 0.24.1` and `realfft 3.5.0`, omit these files. Any supplemental texts must come from a verified upstream source for the exact package version, retain copyright notices, and be bound to the reviewed package checksum. Do not synthesize notices, silently skip dependencies, or make this gate non-blocking. See [Status](../../STATUS.md) for the current blocker.
+
 The following commands use PowerShell and preserve JSON as UTF-8 rather than relying on shell redirection defaults:
 
 ```powershell
