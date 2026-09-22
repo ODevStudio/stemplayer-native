@@ -1,32 +1,9 @@
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicBool;
 use stemplayer_format::{BoundedReader, inspect_mp4_structure, inspect_wave, parse_manifest};
 
-static NEXT: AtomicU64 = AtomicU64::new(1);
-
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new() -> Self {
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "stemplayer-hostile-format-{}-{id}.bin",
-            std::process::id()
-        ));
-        Self(path)
-    }
-
-    fn write(&self, bytes: &[u8]) {
-        fs::write(&self.0, bytes).unwrap();
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
+#[path = "../../../tools/test-support/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 fn next(state: &mut u64) -> u64 {
     *state ^= *state << 13;
@@ -116,19 +93,19 @@ fn hostile_manifest_mutations_never_escape_the_parser_contract() {
 
 #[test]
 fn hostile_wav_and_mp4_mutations_never_panic_or_read_unbounded_ranges() {
-    let scratch = Scratch::new();
+    let scratch = Scratch::new().unwrap();
     let cancelled = AtomicBool::new(false);
-    scratch.write(&valid_wav());
-    assert!(inspect_wave(BoundedReader::open(&scratch.0).unwrap(), &cancelled).is_ok());
+    let path = scratch.write("input.bin", &valid_wav()).unwrap();
+    assert!(inspect_wave(BoundedReader::open(&path).unwrap(), &cancelled).is_ok());
 
     for seed in [valid_wav(), mp4_seed()] {
         for round in 0..384 {
             let bytes = mutated(&seed, round);
-            scratch.write(&bytes);
-            if let Ok(reader) = BoundedReader::open(&scratch.0) {
+            scratch.write("input.bin", &bytes).unwrap();
+            if let Ok(reader) = BoundedReader::open(&path) {
                 let _ = inspect_wave(reader, &cancelled);
             }
-            if let Ok(reader) = BoundedReader::open(&scratch.0) {
+            if let Ok(reader) = BoundedReader::open(&path) {
                 let _ = inspect_mp4_structure(reader, &cancelled);
             }
         }

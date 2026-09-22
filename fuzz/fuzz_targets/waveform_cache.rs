@@ -2,31 +2,25 @@
 
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use stemplayer_domain::{GenerationId, SampleRate, SourceFrame};
 use stemplayer_waveform::{CacheConfig, SourceFingerprint, WaveformCache};
 
+#[path = "../../tools/test-support/scratch.rs"]
+mod scratch;
+
 const MAX_INPUT: usize = 4 * 1024 * 1024;
-static ROOT: OnceLock<PathBuf> = OnceLock::new();
+static ROOT: OnceLock<scratch::Scratch> = OnceLock::new();
 static CACHE: OnceLock<WaveformCache> = OnceLock::new();
 
-fn root() -> &'static PathBuf {
-    ROOT.get_or_init(|| {
-        let path = std::env::temp_dir().join(format!(
-            "stemplayer-fuzz-waveform-cache-{}",
-            std::process::id()
-        ));
-        let _ = fs::create_dir_all(&path);
-        path
-    })
+fn root() -> &'static scratch::Scratch {
+    ROOT.get_or_init(|| scratch::Scratch::new().expect("private fuzz directory"))
 }
 
 fn cache() -> &'static WaveformCache {
     CACHE.get_or_init(|| {
         WaveformCache::new(
-            root().clone(),
+            root().path().to_path_buf(),
             CacheConfig {
                 enabled: true,
                 capacity_bytes: 8 * 1024 * 1024,
@@ -38,10 +32,9 @@ fn cache() -> &'static WaveformCache {
 }
 
 fn exercise(bytes: &[u8], fingerprint: SourceFingerprint) {
-    let path = root().join(format!("{}.spwf", fingerprint.hex()));
-    if fs::write(path, bytes).is_err() {
-        return;
-    }
+    root()
+        .write(&format!("{}.spwf", fingerprint.hex()), bytes)
+        .expect("fuzz input write");
     let _ = cache().load(
         fingerprint,
         GenerationId::INITIAL,

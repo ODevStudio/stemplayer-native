@@ -33,7 +33,10 @@ fn mutated(seed: &[u8], round: u64) -> Vec<u8> {
                 next(&mut state) as usize % (bytes.len() + 1)
             };
             let count = (next(&mut state) as usize % 24) + 1;
-            bytes.splice(index..index, std::iter::repeat_n(next(&mut state) as u8, count));
+            bytes.splice(
+                index..index,
+                std::iter::repeat_n(next(&mut state) as u8, count),
+            );
         }
         3 => bytes.extend((0..48).map(|_| next(&mut state) as u8)),
         _ => {
@@ -73,7 +76,8 @@ fn hostile_hls_json_mutations_fail_closed_without_panics() {
 #[test]
 fn hostile_playlist_mutations_fail_closed_without_panics() {
     let url = Url::parse("https://example.test/stemset/drums.m3u8").unwrap();
-    let seed = b"#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:1.000000,\nsegment.m4a\n#EXT-X-ENDLIST\n";
+    let seed =
+        b"#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:1.000000,\nsegment.m4a\n#EXT-X-ENDLIST\n";
     assert!(MediaPlaylist::parse(seed, &url, 48_000, 0).is_ok());
     for round in 0..768 {
         let bytes = mutated(seed, round);

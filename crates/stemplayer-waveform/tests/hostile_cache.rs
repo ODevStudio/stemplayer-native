@@ -1,31 +1,10 @@
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use stemplayer_domain::{GenerationId, SampleRate, SourceFrame};
 use stemplayer_waveform::{CacheConfig, SourceFingerprint, WaveformCache};
 
-static NEXT: AtomicU64 = AtomicU64::new(1);
-
-struct Fixture(PathBuf);
-
-impl Fixture {
-    fn new() -> Self {
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "stemplayer-hostile-cache-{}-{id}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+#[path = "../../../tools/test-support/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 fn next(state: &mut u64) -> u64 {
     *state ^= *state << 13;
@@ -36,9 +15,9 @@ fn next(state: &mut u64) -> u64 {
 
 #[test]
 fn hostile_cache_records_fail_closed_without_panics_or_large_allocations() {
-    let fixture = Fixture::new();
+    let fixture = Scratch::new().unwrap();
     let cache = WaveformCache::new(
-        fixture.0.clone(),
+        fixture.path().to_path_buf(),
         CacheConfig {
             enabled: true,
             capacity_bytes: 4 * 1024 * 1024,
@@ -47,7 +26,7 @@ fn hostile_cache_records_fail_closed_without_panics_or_large_allocations() {
     )
     .unwrap();
     let fingerprint = SourceFingerprint::from_bytes([0x5a; 32]);
-    let path = fixture.0.join(format!("{}.spwf", fingerprint.hex()));
+    let name = format!("{}.spwf", fingerprint.hex());
 
     for round in 0..512_u64 {
         let mut state = 0x243f_6a88_85a3_08d3 ^ round.wrapping_mul(0x9e37_79b9_7f4a_7c15);
@@ -59,7 +38,7 @@ fn hostile_cache_records_fail_closed_without_panics_or_large_allocations() {
             let checksum = Sha256::digest(&record);
             record.extend_from_slice(&checksum);
         }
-        fs::write(&path, &record).unwrap();
+        fixture.write(&name, &record).unwrap();
         let _ = cache.load(
             fingerprint,
             GenerationId::INITIAL,

@@ -53,6 +53,6 @@ Do not attach private crash artifacts or raw machine paths to public issue text.
 
 ## Invariants
 
-Fuzz targets must keep input sizes explicit and bounded, must not make external network requests, and must not depend on audio hardware, UI state, signing credentials, or private fixtures. File-backed fuzz targets may use process-scoped temporary files because the production WAV/MP4, settings, and cache contracts include filesystem identity and bounded regular-file checks.
+Fuzz targets must keep input sizes explicit and bounded, must not make external network requests, and must not depend on audio hardware, UI state, signing credentials, or private fixtures. File-backed targets and mutation tests share the standard-library [scratch helper](../../tools/test-support/scratch.rs): directories are created exclusively, use owner-only permissions on Unix, and never reuse existing directories or links. Each input is unlinked and then created exclusively so existing hard links cannot redirect a write. Setup and write errors fail the fuzz run rather than silently skipping coverage. Process-scoped fuzz directories may remain after libFuzzer exits; they are never reused.
 
 A new parser or untrusted serialization boundary should receive both a deterministic malformed-input regression layer and a coverage-guided target when the boundary can be exercised without unsafe external side effects.

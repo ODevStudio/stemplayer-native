@@ -66,7 +66,12 @@ pub fn write() {
         .flatten()
         .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()));
     let dirty = same_root
-        .then(|| git(root, &["status", "--porcelain=v1", "--untracked-files=normal"]))
+        .then(|| {
+            git(
+                root,
+                &["status", "--porcelain=v1", "--untracked-files=normal"],
+            )
+        })
         .flatten()
         .map(|status| !status.is_empty());
 
