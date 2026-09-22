@@ -1,0 +1,74 @@
+[package]
+name = "stemplayer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+sha2 = "=0.10.9"
+stemplayer-domain = { path = "../crates/stemplayer-domain" }
+stemplayer-format = { path = "../crates/stemplayer-format", features = ["local-wav", "local-mp4"] }
+stemplayer-network = { path = "../crates/stemplayer-network", features = ["hls"] }
+stemplayer-platform = { path = "../crates/stemplayer-platform" }
+stemplayer-waveform = { path = "../crates/stemplayer-waveform" }
+unicode-normalization = "=0.1.25"
+url = "=2.5.8"
+
+[[bin]]
+name = "studio_manifest"
+path = "fuzz_targets/studio_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "local_containers"
+path = "fuzz_targets/local_containers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hls_json"
+path = "fuzz_targets/hls_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hls_playlist"
+path = "fuzz_targets/hls_playlist.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hls_url_policy"
+path = "fuzz_targets/hls_url_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settings"
+path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "waveform_cache"
+path = "fuzz_targets/waveform_cache.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
