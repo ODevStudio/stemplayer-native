@@ -47,7 +47,6 @@ export component PlaylistPanel inherits Rectangle {
     in property <[PlaylistRow]> items;
     in-out property <int> selected-index: 0;
     in-out property <bool> expanded: true;
-    in property <string> cache-progress: "";
     callback selected(int, bool, bool);
     callback context-selected(int);
     callback reordered(int, int);
@@ -82,7 +81,7 @@ export component PlaylistPanel inherits Rectangle {
         x: 38px;
         y: 1px;
         z: 2;
-        width: parent.width - 44px - (root.cache-progress == "" ? 0px : 52px);
+        width: parent.width - 44px;
         height: 32px;
         text: root.items.length == 0 || root.selected-index < 0
             ? "No track selected"
@@ -93,20 +92,6 @@ export component PlaylistPanel inherits Rectangle {
         vertical-alignment: center;
         overflow: elide;
     }
-    if root.cache-progress != "": Text {
-        x: parent.width - 50px;
-        y: 1px;
-        z: 2;
-        width: 44px;
-        height: 32px;
-        text: root.cache-progress;
-        color: Palette.foreground;
-        font-size: 12px;
-        font-weight: 600;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-    }
-
     if root.expanded: list-focus := FocusScope {
         x: 2px;
         y: 34px;
@@ -116,10 +101,26 @@ export component PlaylistPanel inherits Rectangle {
         KeyBinding { keys: @keys(Delete); activated => { root.remove-selected(); } }
         KeyBinding { keys: @keys(Return); activated => { if root.selected-index >= 0 { root.activated(root.selected-index); } } }
         ScrollView {
+            private property <int> selected-row: root.selected-index;
             width: parent.width;
             height: parent.height;
             vertical-scrollbar-policy: ScrollBarPolicy.always-on;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            changed selected-row => { self.reveal-selected-row(); }
+            changed visible-height => { self.reveal-selected-row(); }
+            changed viewport-height => { self.reveal-selected-row(); }
+
+            function reveal-selected-row() {
+                if self.selected-row >= 0 && self.selected-row < root.items.length && self.visible-height > 0px {
+                    let top = self.selected-row * 28px;
+                    let bottom = top + 27px;
+                    self.viewport-y = min(0px, max(
+                        self.visible-height - self.viewport-height,
+                        max(-top, min(self.viewport-y, self.visible-height - bottom)),
+                    ));
+                }
+            }
+
             list-rows := VerticalLayout {
                 spacing: 1px;
                 for item[index] in root.items: row := Rectangle {

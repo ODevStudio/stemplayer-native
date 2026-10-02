@@ -19,7 +19,7 @@ impl AnalysisPriority {
             generation,
             low_watermark_frames,
             worker_limit: 1,
-            pending_block_limit: 1,
+            pending_block_limit: 32,
         }
     }
 
@@ -65,6 +65,6 @@ mod tests {
             AnalysisDecision::Cancel
         );
         assert_eq!(priority.worker_limit(), 1);
-        assert_eq!(priority.pending_block_limit(), 1);
+        assert_eq!(priority.pending_block_limit(), 32);
     }
 }

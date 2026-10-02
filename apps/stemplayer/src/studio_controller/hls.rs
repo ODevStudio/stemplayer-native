@@ -14,6 +14,7 @@ impl WorkerState {
         self.close_output()?;
         self.engine = None;
         self.analysis = None;
+        self.waveform_error = None;
         self.fingerprint = None;
         self.current_source = None;
         *shared

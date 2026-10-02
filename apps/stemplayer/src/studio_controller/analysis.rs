@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
 use stemplayer_domain::{
     ErrorCode, GenerationId, PlayerError, SourceFrame, SourceKind, SourceMetadata,
 };
@@ -8,6 +9,8 @@ use stemplayer_waveform::{
     AnalysisDecision, AnalysisPriority, CacheStatus, PeakAnalyzer, SourceFingerprint,
     WaveformSnapshot,
 };
+
+const ANALYSIS_SLICE: Duration = Duration::from_millis(10);
 
 pub(super) struct AnalysisWork {
     decoder: AnalysisDecoder,
@@ -77,40 +80,50 @@ impl AnalysisWork {
         &mut self,
         engine: &PlaybackEngine,
     ) -> Result<Option<(WaveformSnapshot, bool)>, PlayerError> {
-        let (active, buffered, _) = engine.playback_pressure();
-        if self.priority.decision(self.generation, active, buffered) != AnalysisDecision::Run {
+        let mut snapshot_due = false;
+        let started = Instant::now();
+        for block in 0..self.priority.pending_block_limit() {
+            if block > 0 && started.elapsed() >= ANALYSIS_SLICE {
+                break;
+            }
+            let (active, buffered, _) = engine.playback_pressure();
+            if self.priority.decision(self.generation, active, buffered) != AnalysisDecision::Run {
+                break;
+            }
+            let frames = (self.end_frame - self.next_frame)
+                .min(u64::from(stemplayer_decode::MAX_DECODE_FRAMES))
+                as u32;
+            if frames == 0 {
+                break;
+            }
+            let block = self.decoder.decode(self.next_frame, frames)?;
+            self.next_frame += u64::from(block.frames);
+            let analyzer = self.analyzer.as_mut().ok_or_else(|| {
+                PlayerError::new(ErrorCode::Internal, "Waveform analyzer is unavailable")
+            })?;
+            analyzer.ingest(
+                SourceFrame::new(block.start_frame as i64),
+                block.frames,
+                block.channels,
+                &block.samples,
+            )?;
+            if self.next_frame == self.end_frame {
+                return Ok(Some((
+                    self.analyzer.take().unwrap().finish(self.cache_status)?,
+                    true,
+                )));
+            }
+            if self.next_frame >= self.next_snapshot_frame {
+                self.next_snapshot_frame = self.next_frame.saturating_add(self.snapshot_interval);
+                snapshot_due = true;
+            }
+        }
+        if !snapshot_due {
             return Ok(None);
         }
-        let frames = (self.end_frame - self.next_frame)
-            .min(u64::from(stemplayer_decode::MAX_DECODE_FRAMES)) as u32;
-        if frames == 0 {
-            return Ok(None);
-        }
-        let block = self.decoder.decode(self.next_frame, frames)?;
-        self.next_frame += u64::from(block.frames);
-        let analyzer = self.analyzer.as_mut().ok_or_else(|| {
+        let analyzer = self.analyzer.as_ref().ok_or_else(|| {
             PlayerError::new(ErrorCode::Internal, "Waveform analyzer is unavailable")
         })?;
-        analyzer.ingest(
-            SourceFrame::new(block.start_frame as i64),
-            block.frames,
-            block.channels,
-            &block.samples,
-        )?;
-        let complete = self.next_frame == self.end_frame;
-        if complete {
-            return Ok(Some((
-                self.analyzer.take().unwrap().finish(self.cache_status)?,
-                true,
-            )));
-        }
-        if self.next_frame < self.next_snapshot_frame {
-            return Ok(None);
-        }
-        self.next_snapshot_frame = self
-            .next_snapshot_frame
-            .saturating_add(self.snapshot_interval);
-        let snapshot = analyzer.snapshot(self.cache_status);
-        Ok(Some((snapshot, false)))
+        Ok(Some((analyzer.snapshot(self.cache_status), false)))
     }
 }

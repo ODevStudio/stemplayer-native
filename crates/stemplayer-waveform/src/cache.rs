@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 use stemplayer_domain::{ErrorCode, GenerationId, PlayerError, SampleRate, SourceFrame};
 
@@ -55,6 +55,7 @@ pub struct WaveformCache {
     enabled: bool,
     capacity_bytes: AtomicU64,
     maximum_entries: usize,
+    cleaned: AtomicBool,
     operation: Mutex<()>,
 }
 
@@ -72,6 +73,7 @@ impl WaveformCache {
             enabled: config.enabled,
             capacity_bytes: AtomicU64::new(config.capacity_bytes),
             maximum_entries: config.maximum_entries,
+            cleaned: AtomicBool::new(false),
             operation: Mutex::new(()),
         })
     }
@@ -90,6 +92,9 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.cleanup_temporary().is_err() {
+            return result(CacheStatus::Error);
+        }
         let path = self.path(fingerprint);
         let bytes = match read_record(&path) {
             Ok(bytes) => bytes,
@@ -129,6 +134,7 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.cleanup_temporary()?;
         let bytes = encode(snapshot)?;
         if bytes.len() as u64 > MAX_RECORD_BYTES
             || bytes.len() as u64 > self.capacity_bytes.load(Ordering::Acquire)
@@ -181,6 +187,7 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.cleanup_temporary()?;
         remove_if_present(&self.path(fingerprint))
     }
 
@@ -189,6 +196,7 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.cleanup_temporary()?;
         for entry in entries(&self.root)? {
             remove_if_present(&entry.path)?;
         }
@@ -203,6 +211,7 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.cleanup_temporary()?;
         let mut entries = entries(&self.root)?;
         entries.sort_by_key(|entry| entry.modified);
         let mut bytes = entries.iter().map(|entry| entry.bytes).sum::<u64>();
@@ -218,6 +227,25 @@ impl WaveformCache {
     fn path(&self, fingerprint: SourceFingerprint) -> PathBuf {
         self.root
             .join(format!("{}.{}", fingerprint.hex(), EXTENSION))
+    }
+
+    fn cleanup_temporary(&self) -> Result<(), PlayerError> {
+        if self.cleaned.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        for item in fs::read_dir(&self.root)
+            .map_err(|source| io_error("Waveform cache directory cannot be read", source))?
+            .take(MAX_SCAN_ENTRIES)
+        {
+            let path = item
+                .map_err(|source| io_error("Waveform cache entry cannot be read", source))?
+                .path();
+            if path.extension().and_then(|value| value.to_str()) == Some("tmp") {
+                let _ = fs::remove_file(path);
+            }
+        }
+        self.cleaned.store(true, Ordering::Release);
+        Ok(())
     }
 
     fn evict(
@@ -312,17 +340,6 @@ fn ensure_root(root: &Path) -> Result<(), PlayerError> {
         .map_err(|source| io_error("Waveform cache directory metadata is unavailable", source))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(error("Waveform cache root is unsafe"));
-    }
-    for item in fs::read_dir(root)
-        .map_err(|source| io_error("Waveform cache directory cannot be read", source))?
-        .take(MAX_SCAN_ENTRIES)
-    {
-        let path = item
-            .map_err(|source| io_error("Waveform cache entry cannot be read", source))?
-            .path();
-        if path.extension().and_then(|value| value.to_str()) == Some("tmp") {
-            let _ = fs::remove_file(path);
-        }
     }
     Ok(())
 }
@@ -644,6 +661,21 @@ mod tests {
             )
             .unwrap();
         analyzer.finish(CacheStatus::Miss).unwrap()
+    }
+
+    #[test]
+    fn stale_temporary_files_are_cleaned_on_first_cache_operation() {
+        let fixture = Fixture::new();
+        let temporary = fixture.0.join("stale.tmp");
+        fs::write(&temporary, b"partial").unwrap();
+        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
+        assert!(temporary.exists());
+
+        assert_eq!(
+            load(&cache, SourceFingerprint::from_bytes([8; 32])).status,
+            CacheStatus::Miss
+        );
+        assert!(!temporary.exists());
     }
 
     #[test]

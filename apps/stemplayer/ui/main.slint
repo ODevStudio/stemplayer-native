@@ -47,7 +47,6 @@ export component AppWindow inherits Window {
     in-out property <int> playlist-index: 0;
     in-out property <bool> playlist-expanded: true;
     in-out property <float> playlist-expanded-window-height: 620;
-    in property <string> playlist-cache-progress: "";
     in property <string> buffering-text: "";
     in property <string> output-rate-text: "Output rate unavailable";
     in property <string> error-text: "";
@@ -588,7 +587,6 @@ export component AppWindow inherits Window {
             items: root.playlist-items;
             selected-index <=> root.playlist-index;
             expanded <=> root.playlist-expanded;
-            cache-progress: root.playlist-cache-progress;
             selected(index, control, shift) => { root.select-playlist-item(index, control, shift); }
             context-selected(index) => { root.context-select-playlist-item(index); }
             reordered(from, to) => { root.reorder-playlist-item(from, to); }

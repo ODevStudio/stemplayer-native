@@ -12,6 +12,9 @@ mod studio_ui;
 
 slint::include_modules!();
 
+#[cfg(test)]
+mod playlist_scroll_tests;
+
 fn main() -> Result<(), slint::PlatformError> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mode = args.first();

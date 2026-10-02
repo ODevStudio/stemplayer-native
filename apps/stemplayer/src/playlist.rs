@@ -28,7 +28,7 @@ pub struct Playlist {
 
 impl Playlist {
     pub fn append(&mut self, items: Vec<PlaylistItem>) -> Option<PathBuf> {
-        let was_empty = self.items.is_empty();
+        let first_new_index = self.items.len();
         let mut seen = self
             .items
             .iter()
@@ -41,9 +41,11 @@ impl Playlist {
                 .filter(|item| seen.insert(item.source.clone()))
                 .take(available),
         );
-        if was_empty && !self.items.is_empty() {
-            self.select(0, false, false);
-            return self.activate(0);
+        if first_new_index < self.items.len() {
+            self.select(first_new_index, false, false);
+            if first_new_index == 0 {
+                return self.activate(0);
+            }
         }
         self.rebuild_shuffle();
         None
@@ -97,10 +99,6 @@ impl Playlist {
             .iter()
             .filter_map(|item| item.source.to_str().map(str::to_owned))
             .collect()
-    }
-
-    pub fn source_paths(&self) -> Vec<PathBuf> {
-        self.items.iter().map(|item| item.source.clone()).collect()
     }
 
     pub fn selected_source(&self) -> Option<String> {
@@ -190,26 +188,40 @@ impl Playlist {
         self.next_with_repeat(false)
     }
 
+    pub fn upcoming_source(&mut self) -> Option<PathBuf> {
+        let index = self.next_index(self.repeat, false)?;
+        self.items.get(index).map(|item| item.source.clone())
+    }
+
     fn next_with_repeat(&mut self, repeat: bool) -> Option<(usize, PathBuf)> {
+        let active = self.active?;
+        let index = self.next_index(repeat, true)?;
+        if index != active {
+            self.history.push(active);
+        }
+        let source = self.activate_index(index)?;
+        Some((index, source))
+    }
+
+    fn next_index(&mut self, repeat: bool, advance: bool) -> Option<usize> {
         let active = self.active?;
         let index = if self.shuffle {
             if self.remaining.is_empty() && repeat {
                 self.rebuild_shuffle();
             }
-            self.remaining
-                .pop()
-                .or_else(|| (repeat && self.items.len() == 1).then_some(active))?
+            (if advance {
+                self.remaining.pop()
+            } else {
+                self.remaining.last().copied()
+            })
+            .or_else(|| (repeat && self.items.len() == 1).then_some(active))?
         } else {
             active
                 .checked_add(1)
                 .filter(|index| *index < self.items.len())
                 .or_else(|| repeat.then_some(0))?
         };
-        if index != active {
-            self.history.push(active);
-        }
-        let source = self.activate_index(index)?;
-        Some((index, source))
+        Some(index)
     }
 
     pub fn previous(&mut self) -> Option<(usize, PathBuf)> {
@@ -639,6 +651,42 @@ mod tests {
         assert_eq!(playlist.next(), None);
     }
 
+    #[test]
+    fn upcoming_source_matches_the_next_track_without_activating_it() {
+        let mut playlist = Playlist::default();
+        playlist.append((0..4).map(item).collect());
+        playlist.activate(0);
+
+        assert_eq!(playlist.upcoming_source(), Some(item(1).source));
+        assert_eq!(playlist.active, Some(0));
+        assert_eq!(playlist.next(), Some((1, item(1).source)));
+
+        playlist.set_shuffle(true);
+        let upcoming = playlist.upcoming_source().unwrap();
+        assert_eq!(playlist.upcoming_source().unwrap(), upcoming);
+        assert_eq!(playlist.active, Some(1));
+        assert_eq!(playlist.next().unwrap().1, upcoming);
+    }
+
+    #[test]
+    fn failed_tracks_exhaust_the_playlist_even_with_repeat_and_shuffle() {
+        for shuffle in [false, true] {
+            let mut playlist = Playlist::default();
+            playlist.append((0..4).map(item).collect());
+            playlist.activate(0);
+            playlist.set_repeat(true);
+            playlist.set_shuffle(shuffle);
+
+            let skipped = (0..3)
+                .map(|_| playlist.next_after_error().unwrap().0)
+                .collect::<BTreeSet<_>>();
+
+            assert_eq!(skipped, BTreeSet::from([1, 2, 3]));
+            assert_eq!(playlist.next_after_error(), None);
+            assert_eq!(playlist.next_after_error(), None);
+        }
+    }
+
     fn item(index: usize) -> PlaylistItem {
         PlaylistItem {
             label: format!("Track {index}"),
@@ -647,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn append_preserves_items_deduplicates_limits_and_keeps_active() {
+    fn append_selects_the_first_new_track_without_changing_the_active_track() {
         let mut playlist = Playlist::default();
         assert_eq!(
             playlist.append(vec![item(0), item(1)]),
@@ -661,7 +709,12 @@ mod tests {
         assert_eq!(playlist.items[0], item(0));
         assert_eq!(playlist.items[1], item(1));
         assert_eq!(playlist.active, Some(1));
-        assert_eq!(playlist.selected(), Some(1));
+        assert_eq!(playlist.selected(), Some(2));
+        assert_eq!(playlist.selected, BTreeSet::from([2]));
+        assert_eq!(playlist.active_source(), Some(item(1).source));
+        assert_eq!(playlist.append(vec![item(0), item(600)]), None);
+        assert_eq!(playlist.selected(), Some(2));
+        assert_eq!(playlist.active, Some(1));
     }
 
     #[test]
