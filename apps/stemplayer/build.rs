@@ -1,4 +1,7 @@
+mod build_identity;
+
 fn main() {
+    build_identity::write();
     slint_build::compile("ui/main.slint").expect("Slint UI must compile");
     #[cfg(target_os = "windows")]
     build_windows_icon();
@@ -13,11 +16,16 @@ fn build_windows_icon() {
     fs::write(&icon_path, icon_bytes()).expect("Stemplayer icon must be writable");
     let resource_path = out_dir.join("stemplayer.rc");
     let icon_path = icon_path.to_string_lossy().replace('\\', "/");
-    fs::write(&resource_path, format!("1 ICON \"{icon_path}\"\n"))
-        .expect("Windows resource file must be writable");
+    let identity_path = out_dir.join("build-info.json");
+    let identity_path = identity_path.to_string_lossy().replace('\\', "/");
+    fs::write(
+        &resource_path,
+        format!("#pragma code_page(65001)\n1 ICON \"{icon_path}\"\n2 RCDATA \"{identity_path}\"\n"),
+    )
+    .expect("Windows resource file must be writable");
     embed_resource::compile(&resource_path, embed_resource::NONE)
         .manifest_optional()
-        .expect("Stemplayer icon must be embedded");
+        .expect("Stemplayer icon and build identity must be embedded");
 }
 
 #[cfg(target_os = "windows")]

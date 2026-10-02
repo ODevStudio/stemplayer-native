@@ -16,6 +16,7 @@ Start with the smallest document that answers the task. This index is for contri
 - [Contributing](../CONTRIBUTING.md)
 - [Documentation policy](maintenance/documentation-policy.md)
 - [Test strategy](maintenance/test-strategy.md)
+- [Build evidence and local support](release/README.md)
 
 ## Durable technical references
 

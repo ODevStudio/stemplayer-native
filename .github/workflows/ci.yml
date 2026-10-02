@@ -27,16 +27,19 @@ jobs:
           pyflakes: false
       - name: Check repository documentation and workflow policy
         run: python scripts/check_repository.py
-      - name: Test repository checks
+      - name: Test repository checks and release tooling
         run: python -m unittest discover -s scripts -p "test_*.py"
       - name: Check whitespace
         run: git diff --check
 
   quality:
+    needs: workflow-integrity
     strategy:
       fail-fast: false
+      # Free-tier budget policy: PRs use one Linux runner; master/tags add Windows;
+      # macOS is optional Phase 12 coverage and runs only by explicit dispatch.
       matrix:
-        os: [windows-2025, ubuntu-24.04, macos-15]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || github.event_name == 'workflow_dispatch' && '["ubuntu-24.04","windows-2025","macos-15"]' || '["ubuntu-24.04","windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -53,10 +56,23 @@ jobs:
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # actions/cache v4.2.4
         with:
           path: |
+            ~/.cargo/bin/cargo-deny
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Remap private build paths
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          flags = []
+          for root, replacement in [(Path.home(), "/cargo-home"), (Path(os.environ["GITHUB_WORKSPACE"]), "/src")]:
+              for spelling in sorted({str(root), root.as_posix()}):
+                  flags.append(f"--remap-path-prefix={spelling}={replacement}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write("CARGO_ENCODED_RUSTFLAGS=" + chr(31).join(flags) + "\n")
+          PY
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -70,6 +86,15 @@ jobs:
             libx11-dev \
             xinput \
             xvfb
+      - name: Install dependency-policy tool
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v cargo-deny >/dev/null 2>&1; then
+            cargo install --locked cargo-deny --version 0.20.2
+          fi
+      - name: Enforce dependency policy
+        if: runner.os == 'Linux'
+        run: cargo deny check
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -80,6 +105,28 @@ jobs:
         run: cargo test --locked -p stemplayer
       - name: Product release build
         run: cargo build --locked --release -p stemplayer
+      - name: Local-only native support smoke
+        run: |
+          mkdir -p artifacts/tmp
+          support=target/release/stemplayer-support
+          if [ "$RUNNER_OS" = "Windows" ]; then support="$support.exe"; fi
+          "$support" --build-info --output artifacts/tmp/build-info.json
+          "$support" --report --output artifacts/tmp/support-report.json
+          "$support" --benchmark --iterations 2 --output artifacts/tmp/support-benchmark.json
+      - name: Enforce unsigned Windows build evidence
+        if: runner.os == 'Windows'
+        run: |
+          target="$(python -c 'import json; print(json.load(open("artifacts/tmp/build-info.json"))["target"])')"
+          cargo metadata --locked --offline --format-version 1 \
+            --manifest-path apps/stemplayer/Cargo.toml --filter-platform "$target" \
+            > artifacts/tmp/release-cargo-metadata.json
+          python scripts/release_evidence.py collect \
+            --build-info artifacts/tmp/build-info.json \
+            --metadata artifacts/tmp/release-cargo-metadata.json \
+            --binary target/release/stemplayer.exe \
+            --support-binary target/release/stemplayer-support.exe \
+            --output artifacts/unsigned-build-evidence
+          python scripts/release_evidence.py verify artifacts/unsigned-build-evidence
       - name: UI startup smoke
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -91,29 +138,3 @@ jobs:
         run: cargo check --locked --workspace --no-default-features
       - name: Full feature check
         run: cargo check --locked --workspace --all-features
-
-  dependency-policy:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout v4.2.2
-      - name: Install pinned Rust toolchain
-        run: |
-          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
-          test -n "$toolchain"
-          rustup toolchain install --profile minimal "$toolchain"
-      - name: Cache dependency tool and Cargo state
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # actions/cache v4.2.4
-        with:
-          path: |
-            ~/.cargo/bin/cargo-deny
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-deny-0.20.2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-      - name: Install cargo-deny when not cached
-        run: |
-          if ! command -v cargo-deny >/dev/null 2>&1; then
-            cargo install --locked cargo-deny --version 0.20.2
-          fi
-      - name: Enforce dependency policy
-        run: cargo deny check
