@@ -21,6 +21,18 @@ function Assert-PreviewSourceUnchanged {
     }
 }
 
+function Assert-PreviewCollectorDiagnostics {
+    param([string[]]$Diagnostics)
+
+    $unresolved = @($Diagnostics | Where-Object {
+        $_ -cmatch 'WARN|ERROR' -and
+        $_ -notmatch "LicenseRef-Slint-Royalty-free-2\.0 has no license file for crate '(i-slint-[a-z-]+|slint|slint-build|slint-macros) 1\.17\.1'"
+    })
+    if ($unresolved.Count -gt 0) {
+        throw "Unresolved license collector diagnostics: $($unresolved -join [Environment]::NewLine)"
+    }
+}
+
 function Assert-PreviewSystemLibraries {
     param([string[]]$Libraries)
 
@@ -97,6 +109,10 @@ function Assert-PreviewPayload {
     }
     if ($notices.Contains('Copyright (c) <year> <copyright holders>')) {
         throw 'Unresolved dependency copyright/attribution in generated notices; review upstream evidence'
+    }
+    if (-not $notices.Contains('Copyright 2015 The Chromium Authors. All rights reserved.') -or
+        -not $notices.Contains('Neither the name of Google Inc.')) {
+        throw 'Required AccessKit Chromium attribution is missing'
     }
     if (-not $notices.Contains('Modified symphonia-codec-aac 0.6.0 (MPL-2.0)') -or
         -not $notices.Contains("Full modified source: https://github.com/ODevStudio/stemplayer-native/tree/$($info.source_commit)/vendor/symphonia-codec-aac")) {
@@ -266,9 +282,13 @@ function Invoke-WindowsPreviewPackage {
         Copy-Item -LiteralPath 'docs/release/README.txt' -Destination $payload
         Copy-Item -LiteralPath 'LICENSE-MIT', 'LICENSE-APACHE' -Destination $payload
         $notices = Join-Path $payload 'THIRD-PARTY-NOTICES.txt'
-        Invoke-PreviewCommand $about @('generate', '--locked', '--offline', '--fail', '--manifest-path',
+        $aboutDiagnostics = @(& $about @('generate', '--locked', '--fail', '--manifest-path',
             'apps/stemplayer/Cargo.toml', '--target', 'x86_64-pc-windows-msvc', '--config', 'about.toml',
-            '--output-file', $notices, 'scripts/preview-notices.hbs')
+            '--output-file', $notices, 'scripts/preview-notices.hbs') 2>&1)
+        $aboutExitCode = $LASTEXITCODE
+        $aboutDiagnostics | Write-Output
+        if ($aboutExitCode -ne 0) { throw "cargo-about failed with exit code $aboutExitCode" }
+        Assert-PreviewCollectorDiagnostics $aboutDiagnostics
         Add-PreviewSlintLicense $metadata $notices
         Add-PreviewAacNotice $metadata $notices $commit
         $env:CARGO_NET_OFFLINE = 'true'

@@ -85,7 +85,8 @@ foreach ($file in Get-PreviewFiles) {
     [IO.File]::WriteAllText((Join-Path $payload $file), 'synthetic packaging input, not executable media')
 }
 $noticesPath = Join-Path $payload 'THIRD-PARTY-NOTICES.txt'
-$notices = 'Slint Royalty-free Desktop, Mobile, and Web Applications License; MPL-2.0; Mozilla Public License' +
+$notices = 'Slint Royalty-free Desktop, Mobile, and Web Applications License; MPL-2.0; Mozilla Public License; ' +
+    'Copyright 2015 The Chromium Authors. All rights reserved.; Neither the name of Google Inc.' +
     "`nModified symphonia-codec-aac 0.6.0 (MPL-2.0)`nFull modified source: https://github.com/ODevStudio/stemplayer-native/tree/" +
     ('1' * 40) + '/vendor/symphonia-codec-aac'
 [IO.File]::WriteAllText($noticesPath, $notices)
@@ -138,6 +139,8 @@ Write-TestJson $bomPath $bom
 Assert-Failure { Assert-PreviewPayload $payload } 'license text'
 [IO.File]::WriteAllText($noticesPath, $notices + "`nCopyright (c) <year> <copyright holders>")
 Assert-Failure { Assert-PreviewPayload $payload } 'copyright/attribution'
+[IO.File]::WriteAllText($noticesPath, $notices.Replace('Copyright 2015 The Chromium Authors. All rights reserved.', ''))
+Assert-Failure { Assert-PreviewPayload $payload } 'Chromium attribution'
 [IO.File]::WriteAllText($noticesPath, $notices)
 $aacMetadata = [pscustomobject]@{
     workspace_root = $root
@@ -160,6 +163,11 @@ $slintRoot = Join-Path $testRoot 'slint'
 $changedLicense = [pscustomobject]@{ packages = @([pscustomobject]@{ name = 'slint'; version = '1.17.1'; manifest_path = (Join-Path $slintRoot 'Cargo.toml') }) }
 Assert-Failure { Add-PreviewSlintLicense $changedLicense $noticesPath } 'license text changed'
 Assert-Failure { Invoke-PreviewCommand 'pwsh' @('-NoProfile', '-Command', 'exit 7') } 'exit code 7'
+Assert-PreviewCollectorDiagnostics @()
+Assert-PreviewCollectorDiagnostics @("[WARN] LicenseRef-Slint-Royalty-free-2.0 has no license file for crate 'slint 1.17.1'")
+Assert-Failure { Assert-PreviewCollectorDiagnostics @('[WARN] failed to validate all files specified in clarification: checksum mismatch') } 'Unresolved license collector'
+Assert-Failure { Assert-PreviewCollectorDiagnostics @("[WARN] LicenseRef-Slint-Royalty-free-2.0 has no license file for crate 'slint 9.0.0'") } 'Unresolved license collector'
+Assert-Failure { Assert-PreviewCollectorDiagnostics @("`e[33mWARN`e[0m failed to validate license") } 'Unresolved license collector'
 Assert-PreviewSystemLibraries @('kernel32.dll', 'USER32.dll', 'api-ms-win-core-synch-l1-2-0.dll')
 Assert-Failure { Assert-PreviewSystemLibraries @('kernel32.dll', 'VCRUNTIME140.dll') } 'Unapproved Windows imports'
 Assert-Failure { Assert-PreviewSystemLibraries @('browser-helper.dll') } 'Unapproved Windows imports'
@@ -204,3 +212,4 @@ try {
 finally { $zip.Dispose() }
 Assert-Failure { New-PreviewArchive $payload $output } 'overwrite'
 Write-Output 'Windows preview packaging checks passed'
+exit 0

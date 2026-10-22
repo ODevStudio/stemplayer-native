@@ -216,13 +216,19 @@ fn an_open_directory_anchor_stays_inside_the_original_root() {
 #[cfg(unix)]
 #[test]
 fn a_fifo_cache_entry_is_rejected_without_waiting_for_a_writer() {
-    use rustix::fs::{Mode, mkfifoat};
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
 
     let fixture = Fixture::new();
     let root = CacheRoot::new(fixture.0.clone()).unwrap();
-    mkfifoat(&root.directory, "fifo.spwf", Mode::RUSR | Mode::WUSR).unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(fixture.0.join("fifo.spwf"))
+            .status()
+            .unwrap()
+            .success()
+    );
     let (sender, result) = sync_channel(1);
     let worker = std::thread::spawn(move || {
         sender
