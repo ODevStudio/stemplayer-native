@@ -2,7 +2,7 @@ use super::*;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -590,11 +590,31 @@ fn track_with_layout(
 }
 
 fn temporary_path() -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("stemplayer-mp4-{}-{nonce}.mp4", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "stemplayer-mp4-{}-{nonce}-{id}.mp4",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn temporary_paths_are_unique_across_parallel_requests() {
+    let paths = std::thread::scope(|scope| {
+        let workers = (0..4)
+            .map(|_| scope.spawn(|| (0..512).map(|_| temporary_path()).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let unique = paths.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), paths.len());
 }
 
 #[test]
