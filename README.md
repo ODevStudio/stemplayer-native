@@ -4,7 +4,7 @@ Stemplayer Native is a standalone Rust desktop player for supported Studio WAV b
 
 ## Availability
 
-The current checkout is a source build with an [unsigned Windows hobby preview path](docs/release/windows-preview.md). Candidate ZIPs target Windows 11 24H2 or newer, x64, and are not signed or automatically published. See [STATUS.md](STATUS.md) for publication and signed-release blockers. Do not treat a local release build or CI artifact as a qualified distributable.
+The current checkout is a source build with an [unsigned Windows preview path](docs/release/windows-preview.md). Candidate ZIPs target Windows 11 24H2 or newer, x64, and are not signed or automatically published. See [STATUS.md](STATUS.md) for publication and signed-release blockers. Do not treat a local release build or CI artifact as a qualified distributable.
 
 ![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/v1.17.1/logo/MadeWithSlint-logo-whitebg.png)
 
