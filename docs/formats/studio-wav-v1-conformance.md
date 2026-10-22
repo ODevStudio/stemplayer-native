@@ -30,11 +30,11 @@ Decode output is planar Float32. A request is limited to 4,096 frames and one 64
 
 Every routed WAV is inspected before session eligibility. Sample rate and frame count must match exactly. There is no trimming, padding, resampling, or repair.
 
-Each validated track retains its original size and modification identity. Reopening or reading a changed track fails with `E_BUNDLE_INCONSISTENT`.
+Each validated track retains its opened-object identifier, original size and modification time, and a shared open-handle witness. Reads remain bound to that object. Reopening a replacement or detecting changed size/time fails with `E_BUNDLE_INCONSISTENT`; hashing checks the inspected identity before reading. This does not authenticate in-place rewrites that preserve the object identifier, size, and modification time.
 
 ## Resource evidence
 
-Hashing is synchronous and uses at most one open file. Playback uses one bounded decode producer and retains one validated reader per routed track, for a maximum of five open WAV files. Inspection reads only the RIFF header, chunk headers, and `fmt ` bytes unless hash verification is requested. Hashing reads 64 KiB at a time. Each track decoder reuses two 4,096-sample Float32 channel vectors and one bounded encoded range buffer.
+Current inspection retains four or five track witnesses. Synchronous hashing uses at most one additional reader, for a maximum of six handles. One bounded playback decode producer retains one additional validated reader per routed track, for a maximum of ten handles with a five-track bundle. Identity clones share their witness. Inspection reads only the RIFF header, chunk headers, and `fmt ` bytes unless hash verification is requested. Hashing reads 64 KiB at a time. Each track decoder reuses two 4,096-sample Float32 channel vectors and one bounded encoded range buffer.
 
 The sparse-duration test compares a 4,096-frame bundle with a one-hour, 48 kHz bundle. Per-track inspection bytes are identical. A 4,096-frame PCM16 decode reads 16,384 bytes in both cases and returns 4,096 samples per channel.
 

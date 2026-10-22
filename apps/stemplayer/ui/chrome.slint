@@ -48,6 +48,7 @@ export component PlaylistPanel inherits Rectangle {
     in-out property <int> selected-index: 0;
     in-out property <bool> expanded: true;
     callback selected(int, bool, bool);
+    callback navigated(int, bool, bool);
     callback context-selected(int);
     callback reordered(int, int);
     callback activated(int);
@@ -61,7 +62,7 @@ export component PlaylistPanel inherits Rectangle {
     border-color: Palette.border;
     border-width: 1px;
     border-radius: 3px;
-    accessible-role: list;
+    accessible-role: groupbox;
     accessible-label: "Track list";
     private property <int> drag-source: -1;
     private property <int> drag-target: -1;
@@ -97,6 +98,28 @@ export component PlaylistPanel inherits Rectangle {
         y: 34px;
         width: parent.width - 4px;
         height: parent.height - 36px;
+        accessible-role: list;
+        accessible-label: "Tracks";
+        accessible-item-count: root.items.length;
+        accessible-delegate-focus: root.selected-index;
+        key-pressed(event) => {
+            if root.items.length == 0 {
+                return reject;
+            }
+            if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End {
+                let index = event.text == Key.Home ? 0
+                    : event.text == Key.End ? root.items.length - 1
+                    : event.text == Key.UpArrow ? max(0, root.selected-index - 1)
+                    : min(root.items.length - 1, root.selected-index + 1);
+                root.navigated(index, event.modifiers.control, event.modifiers.shift);
+                accept
+            } else if event.text == Key.Space && event.modifiers.control && root.selected-index >= 0 {
+                root.selected(root.selected-index, true, false);
+                accept
+            } else {
+                reject
+            }
+        }
         KeyBinding { keys: @keys(Control + A); activated => { root.select-all(); } }
         KeyBinding { keys: @keys(Delete); activated => { root.remove-selected(); } }
         KeyBinding { keys: @keys(Return); activated => { if root.selected-index >= 0 { root.activated(root.selected-index); } } }
@@ -130,6 +153,19 @@ export component PlaylistPanel inherits Rectangle {
                     border-width: index == root.drag-target && root.drag-target != root.drag-source ? 1px : 0px;
                     accessible-role: list-item;
                     accessible-label: item.label;
+                    accessible-item-selectable: true;
+                    accessible-item-selected: item.selected;
+                    accessible-item-index: index;
+                    accessible-action-default => {
+                        list-focus.focus();
+                        root.selected(index, false, false);
+                    }
+                    if list-focus.has-focus && root.selected-index == index: Rectangle {
+                        width: parent.width;
+                        height: parent.height;
+                        border-color: Palette.accent-background;
+                        border-width: 1px;
+                    }
                     Text {
                         x: 8px;
                         width: parent.width - 16px;

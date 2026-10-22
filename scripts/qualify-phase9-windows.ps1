@@ -110,11 +110,6 @@ function Wait-Name([Windows.Automation.AutomationElement]$Window, [string]$Name)
     throw "Accessible element missing: $Name"
 }
 
-function Invoke-Element([Windows.Automation.AutomationElement]$Element) {
-    $Element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Start-Sleep -Milliseconds 150
-}
-
 function Save-WindowImage([Diagnostics.Process]$Process, [string]$Path) {
     [Phase9Window]::SetForegroundWindow($Process.MainWindowHandle) | Out-Null
     Start-Sleep -Milliseconds 250
@@ -232,7 +227,10 @@ try {
     )
 
     Push-Location $root
-    try { cargo build --release --locked -p stemplayer } finally { Pop-Location }
+    try {
+        cargo build --release --locked -p stemplayer
+        if ($LASTEXITCODE -ne 0) { throw "Player build failed" }
+    } finally { Pop-Location }
 
     $missSnapshotPath = Join-Path $output "analysis-snapshot.json"
     $miss = Start-Process -FilePath $playerPath -ArgumentList @(
@@ -254,9 +252,6 @@ try {
     $copyVisible = [bool]$copy
     $exportVisible = [bool](Wait-Name $missWindow "Export JSON")
     Save-WindowImage $miss (Join-Path $output "normal.png")
-    Invoke-Element (Wait-Name $missWindow "Zoom waveform in")
-    Invoke-Element (Wait-Name $missWindow "Zoom waveform in")
-    Save-WindowImage $miss (Join-Path $output "zoomed.png")
     [Phase9Window]::MoveWindow($miss.MainWindowHandle, 20, 20, [int](740 * $scale), [int](760 * $scale), $true) | Out-Null
     Start-Sleep -Milliseconds 400
     Save-WindowImage $miss (Join-Path $output "compact.png")
@@ -328,7 +323,7 @@ try {
             dpi = $dpi
             copy_action = $copyVisible
             export_action = $exportVisible
-            screenshots = @("normal.png", "compact.png", "zoomed.png", "cached-reopen.png")
+            screenshots = @("normal.png", "compact.png", "cached-reopen.png")
         }
         samples = [ordered]@{ analysis = $missSummary.samples; cached_reopen = $hitSummary.samples }
     }

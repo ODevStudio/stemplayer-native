@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use stemplayer_domain::{
     ErrorCode, GenerationId, PlayerError, SourceFrame, SourceKind, SourceMetadata,
@@ -17,6 +17,7 @@ pub(super) struct AnalysisWork {
     cache_status: CacheStatus,
     analyzer: Option<PeakAnalyzer>,
     priority: AnalysisPriority,
+    cancelled: Arc<AtomicBool>,
     generation: u64,
     next_frame: u64,
     end_frame: u64,
@@ -32,6 +33,7 @@ impl AnalysisWork {
         fingerprint: SourceFingerprint,
         metadata: &SourceMetadata,
         low_watermark_frames: u64,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<Self, PlayerError> {
         let next_frame = u64::try_from(metadata.start_frame.get()).map_err(|_| {
             PlayerError::new(
@@ -57,10 +59,11 @@ impl AnalysisWork {
         }
         let snapshot_interval = (end_frame - next_frame).div_ceil(100).max(1);
         Ok(Self {
-            decoder: engine.analysis_decoder(Arc::new(AtomicBool::new(false))),
+            decoder: engine.analysis_decoder(Arc::clone(&cancelled)),
             cache_status,
             analyzer: Some(analyzer),
             priority: AnalysisPriority::new(generation.get(), low_watermark_frames),
+            cancelled,
             generation: generation.get(),
             next_frame,
             end_frame,
@@ -83,6 +86,7 @@ impl AnalysisWork {
         let mut snapshot_due = false;
         let started = Instant::now();
         for block in 0..self.priority.pending_block_limit() {
+            self.check_cancellation()?;
             if block > 0 && started.elapsed() >= ANALYSIS_SLICE {
                 break;
             }
@@ -97,6 +101,7 @@ impl AnalysisWork {
                 break;
             }
             let block = self.decoder.decode(self.next_frame, frames)?;
+            self.check_cancellation()?;
             self.next_frame += u64::from(block.frames);
             let analyzer = self.analyzer.as_mut().ok_or_else(|| {
                 PlayerError::new(ErrorCode::Internal, "Waveform analyzer is unavailable")
@@ -107,6 +112,7 @@ impl AnalysisWork {
                 block.channels,
                 &block.samples,
             )?;
+            self.check_cancellation()?;
             if self.next_frame == self.end_frame {
                 return Ok(Some((
                     self.analyzer.take().unwrap().finish(self.cache_status)?,
@@ -118,12 +124,98 @@ impl AnalysisWork {
                 snapshot_due = true;
             }
         }
+        self.check_cancellation()?;
         if !snapshot_due {
             return Ok(None);
         }
         let analyzer = self.analyzer.as_ref().ok_or_else(|| {
             PlayerError::new(ErrorCode::Internal, "Waveform analyzer is unavailable")
         })?;
+        self.check_cancellation()?;
         Ok(Some((analyzer.snapshot(self.cache_status), false)))
+    }
+
+    fn check_cancellation(&self) -> Result<(), PlayerError> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(PlayerError::new(
+                ErrorCode::BundleAborted,
+                "Waveform analysis was cancelled",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use stemplayer_engine::{ExternalSource, PlaybackSession, SourceBlock};
+
+    struct CancellingSource {
+        cancelled: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ExternalSource for CancellingSource {
+        fn decode_block(
+            &self,
+            generation: GenerationId,
+            start_frame: u64,
+            frames: u32,
+            cancelled: &AtomicBool,
+        ) -> Result<SourceBlock, PlayerError> {
+            assert!(std::ptr::eq(cancelled, self.cancelled.as_ref()));
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.cancelled.store(true, Ordering::Release);
+            SourceBlock::new(
+                generation,
+                start_frame,
+                frames,
+                8,
+                vec![0.0; frames as usize * 8],
+            )
+        }
+    }
+
+    #[test]
+    fn cancellation_reaches_the_decoder_and_prevents_publication() {
+        for initially_cancelled in [false, true] {
+            let cancelled = Arc::new(AtomicBool::new(initially_cancelled));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let session = PlaybackSession::new_external(
+                "Synthetic waveform",
+                48_000,
+                8,
+                false,
+                GenerationId::INITIAL,
+                Arc::new(CancellingSource {
+                    cancelled: Arc::clone(&cancelled),
+                    calls: Arc::clone(&calls),
+                }),
+            )
+            .unwrap();
+            let metadata = session.metadata().clone();
+            let engine = PlaybackEngine::new(session).unwrap();
+            let mut analysis = AnalysisWork::new(
+                &engine,
+                CacheStatus::Disabled,
+                GenerationId::INITIAL,
+                SourceFingerprint::from_bytes([3; 32]),
+                &metadata,
+                1,
+                cancelled,
+            )
+            .unwrap();
+
+            assert_eq!(
+                analysis.step(&engine).unwrap_err().code,
+                ErrorCode::BundleAborted
+            );
+            assert_eq!(
+                calls.load(Ordering::Relaxed),
+                usize::from(!initially_cancelled)
+            );
+        }
     }
 }

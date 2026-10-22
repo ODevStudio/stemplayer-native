@@ -7,11 +7,14 @@ Status: Phase 0 profile. Decoder acceptance remains provisional until Phase 7 ex
 - Local regular file ending in `.stem.m4a` or `.stem.mp4`; extension is a hint, not trust evidence.
 - ISO Base Media File Format parsed with checked 64-bit offsets.
 - Initial file limit: 16 GiB.
-- Initial structural limits: 1,000,000 boxes, nesting depth 32, 16 tracks, 1 MiB aggregate recognized stem metadata, 256-byte retained track names, and 100,000 edit entries total.
+- Initial structural limits: 1,000,000 boxes, nesting depth 32, 16 tracks, 1 MiB aggregate NI/name/ancillary metadata, 256-byte retained track names, and 100,000 edit entries total.
+- Encoded packets contain at most 1 MiB each. Packet indexes share a 64 MiB allocation budget across routed and unrouted tracks.
+- Each track has one sample description, and sample-to-chunk mappings reference description 1. The `stsd` payload limit is 64 KiB plus 256 bytes; codec configuration remains bounded to 64 KiB.
+- Fragmented MP4 is outside this profile. Inspection validates timing, chunk, count, and packet ranges for unrouted tracks as well as audio routes.
 - Exactly four resolved stereo stem tracks and zero or one stereo master track.
 - Every routed track uses one source sample rate, either 44,100 or 48,000 Hz.
 
-Unknown boxes are skipped only after their ranges are validated. Unsupported video, metadata, or extra audio tracks never become routes.
+Unknown boxes are skipped only after their ranges are validated. Demux-consumed configuration and ancillary metadata remain subject to allocation limits even when native routing does not use them. Unsupported video, metadata, or extra audio tracks never become routes.
 
 ## Role Resolution
 

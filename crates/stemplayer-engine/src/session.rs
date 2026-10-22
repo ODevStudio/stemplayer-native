@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use stemplayer_decode::{
-    CompressedContainer, CompressedTrackInfo, inspect_audio_file, inspect_compressed_container,
+    CompressedContainer, CompressedTrackInfo, inspect_audio_file_cancelled,
+    inspect_compressed_container,
 };
 use stemplayer_domain::{
     ChannelCount, DisplayName, ErrorCode, GenerationId, Microseconds, PlayerError, SampleRate,
@@ -147,7 +148,15 @@ impl PlaybackSession {
     }
 
     pub fn open_audio(path: &Path, generation: GenerationId) -> Result<Self, PlayerError> {
-        let info = inspect_audio_file(path)?;
+        Self::open_audio_cancelled(path, generation, &AtomicBool::new(false))
+    }
+
+    pub fn open_audio_cancelled(
+        path: &Path,
+        generation: GenerationId,
+        cancelled: &AtomicBool,
+    ) -> Result<Self, PlayerError> {
+        let info = inspect_audio_file_cancelled(path, cancelled)?;
         let channel_count = info.channels;
         let sample_rate = SampleRate::new(info.sample_rate)?;
         let frames = info.declared_frames.unwrap();

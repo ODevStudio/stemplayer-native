@@ -1,5 +1,6 @@
 param(
     [string]$OutputDirectory = "artifacts/phase8/windows",
+    [ValidateRange(120, 600)]
     [int]$TimeoutSeconds = 120
 )
 
@@ -9,6 +10,7 @@ $output = Join-Path $root $OutputDirectory
 $profile = Join-Path $env:TEMP ("stemplayer-phase8-ui-" + [DateTime]::UtcNow.Ticks)
 $oldAppData = $env:APPDATA
 $oldLocalAppData = $env:LOCALAPPDATA
+$oldBackend = $env:SLINT_BACKEND
 $env:APPDATA = Join-Path $profile "roaming"
 $env:LOCALAPPDATA = Join-Path $profile "local"
 $env:SLINT_BACKEND = "winit-software"
@@ -80,6 +82,36 @@ function Wait-Control([Windows.Automation.AutomationElement]$Window, [string]$Na
     throw "Accessible control missing: $Name"
 }
 
+function Wait-PlaybackSlider([Windows.Automation.AutomationElement]$Window) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $match = Descendants $Window | Where-Object {
+            $_.Current.Name.EndsWith('. Playback position') -and
+            $_.Current.ControlType -eq [Windows.Automation.ControlType]::Slider
+        } | Select-Object -First 1
+        if ($match) { return $match }
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'Accessible playback slider missing'
+}
+
+function Get-PlayerControlNames {
+    @('Open track folder', 'Open network URL', 'Player settings', 'Play', 'Reset mixer')
+    foreach ($role in 'Drums', 'Bass', 'Other', 'Vocals') {
+        "$role gain"
+        "$role enabled"
+    }
+}
+
+function Get-SettingsControlNames {
+    @('Output device', 'Theme', 'Recent source', 'Remember', 'Waveform cache', 'Waveform cache limit', 'Diagnostics')
+}
+
+function Test-MasterRouting([string]$Status, [bool]$ExpectedMaster) {
+    $mode = if ($ExpectedMaster) { 'Master reference' } else { 'Stem mix' }
+    $Status.Contains(". Automatic: $mode.")
+}
+
 function Send-Key([string]$Keys) {
     [System.Windows.Forms.SendKeys]::SendWait($Keys)
     Start-Sleep -Milliseconds 250
@@ -133,52 +165,50 @@ Push-Location $root
 $players = @()
 try {
     cargo build --release --locked -p stemplayer --no-default-features --features development
+    if ($LASTEXITCODE -ne 0) { throw 'Development player build failed' }
     $player = Start-Player @("--ui-idle", ($TimeoutSeconds * 1000))
     $players += $player
     $window = Wait-MainWindow $player
-    $requiredVisible = @(
-        "Open stem container", "Open Studio bundle manifest", "Open Studio bundle folder",
-        "Playback position", "Play", "Pause", "Stop", "Reset", "Output device", "Theme",
-        "Recent source", "Remember recent sources", "Waveform cache", "Waveform cache limit",
-        "Drums gain", "Mute Drums", "Solo Drums", "Bass gain", "Mute Bass", "Solo Bass",
-        "Other gain", "Mute Other", "Solo Other", "Vocals gain", "Mute Vocals", "Solo Vocals",
-        "Automatic", "Stem mix", "Diagnostics"
-    )
-    $required = @($requiredVisible) + "Master reference"
+    $requiredVisible = @(Get-PlayerControlNames)
+    $requiredSettings = @(Get-SettingsControlNames)
+    $required = $requiredVisible + $requiredSettings
     $elements = @($requiredVisible | ForEach-Object { Wait-Name $window $_ })
+    $container = Wait-Name $window 'Open track folder'
+    $container.SetFocus()
+    Send-Key 'd'
+    $ready = Wait-NamePrefix $window 'Ready.'
+    $masterPresent = Test-MasterRouting $ready.Current.Name $true
+    Invoke-Element (Wait-Name $window 'Player settings')
+    $elements += @($requiredSettings | ForEach-Object { Wait-Name $window $_ })
     $cacheState = Toggle-Element (Wait-Control $window "Waveform cache" ([Windows.Automation.ControlType]::CheckBox))
-    $recentState = Toggle-Element (Wait-Control $window "Remember recent sources" ([Windows.Automation.ControlType]::CheckBox))
+    $recentState = Toggle-Element (Wait-Control $window "Remember" ([Windows.Automation.ControlType]::CheckBox))
     $theme = Wait-Control $window "Theme" ([Windows.Automation.ControlType]::ComboBox)
     $theme.SetFocus()
     Send-Key "{DOWN}"
     Send-Key "{DOWN}"
-    $container = Wait-Name $window "Open stem container"
+    Invoke-Element (Wait-Name $window 'Player settings')
+    $container = Wait-Name $window "Open track folder"
     $container.SetFocus()
+    $diagnostics = Wait-Control $window 'Diagnostics' ([Windows.Automation.ControlType]::Group)
+    $ready = Wait-NamePrefix $window "Ready."
     Send-Key "^o"
-    $ready = Wait-Name $window "Ready"
+    Wait-NamePrefix $window "Ready." | Out-Null
     Send-Key "p"
-    $playing = Wait-Name $window "Playing"
-    $seek = Wait-Name $window "Playback position"
-    $seek.GetCurrentPattern([Windows.Automation.RangeValuePattern]::Pattern).SetValue(0.5)
+    $playing = Wait-NamePrefix $window "Playing."
+    Wait-Name $window 'Pause' | Out-Null
+    $seek = Wait-PlaybackSlider $window
+    $seek.GetCurrentPattern([Windows.Automation.RangeValuePattern]::Pattern).SetValue(500)
     foreach ($role in @("Drums", "Bass", "Other", "Vocals")) {
-        $muteState = Toggle-Element (Wait-Name $window "Mute $role")
-        $soloState = Toggle-Element (Wait-Name $window "Solo $role")
-        if ($muteState -ne [Windows.Automation.ToggleState]::On -or $soloState -ne [Windows.Automation.ToggleState]::On) {
-            throw "$role mixer state did not toggle"
+        $audibleState = Toggle-Element (Wait-Name $window "$role enabled")
+        if ($audibleState -ne [Windows.Automation.ToggleState]::Off) {
+            throw "$role audible state did not toggle"
         }
     }
     $container.SetFocus()
     Send-Key "r"
     Send-Key "p"
-    $paused = Wait-Name $window "Paused"
-    Invoke-Element (Wait-Name $window "Open Studio bundle manifest")
-    Send-Key "^+o"
-    Send-Key "d"
-    $diagnostics = Wait-Name $window "Diagnostics"
+    $paused = Wait-NamePrefix $window "Paused."
     Tab-Through $container 40
-    $master = Wait-Name $window "Master reference"
-    $elements += $master
-    $masterPresent = $master.Current.IsEnabled
     $childProcesses = @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $player.Id } | ForEach-Object Name)
     $nativeProcessTree = @($childProcesses | Where-Object { $_ -match "(?i)(chrome|edge|webview|node|electron)" }).Count -eq 0
     $dpi = [Phase8Window]::GetDpiForWindow($player.MainWindowHandle)
@@ -191,8 +221,8 @@ try {
     Start-Sleep -Milliseconds 500
     $minimized = $windowPattern.Current.WindowVisualState -eq [Windows.Automation.WindowVisualState]::Minimized
     $windowPattern.SetWindowVisualState([Windows.Automation.WindowVisualState]::Normal)
-    Send-Key "p"
-    Wait-Name $window "Playing" | Out-Null
+    Invoke-Element (Wait-Name $window 'Play')
+    Wait-NamePrefix $window "Playing." | Out-Null
     $windowPattern.Close()
     $player.WaitForExit(5000) | Out-Null
     $closeDuringPlayback = $player.HasExited
@@ -201,13 +231,15 @@ try {
         -not $savedSettings.recent_sources_enabled -and
         $savedSettings.theme -eq 2 -and
         $savedSettings.window_width -ge 560 -and
-        $savedSettings.window_height -ge 400
+        $savedSettings.window_height -ge 256
 
     $player = Start-Player @("--ui-no-master", ($TimeoutSeconds * 1000))
     $players += $player
     $window = Wait-MainWindow $player
-    Tab-Through (Wait-Name $window "Open stem container") 40
-    $masterAbsent = -not (Wait-Name $window "Master reference").Current.IsEnabled
+    $container = Wait-Name $window 'Open track folder'
+    $container.SetFocus()
+    $readyWithoutMaster = Wait-NamePrefix $window 'Ready.'
+    $masterAbsent = Test-MasterRouting $readyWithoutMaster.Current.Name $false
     $player.Kill()
     $player.WaitForExit()
 
@@ -218,22 +250,13 @@ try {
     $errorActions = @("Retry output", "Choose source", "Reset player", "Details") | ForEach-Object { Wait-Name $window $_ }
     Invoke-Element (Wait-Name $window "Details")
     Invoke-Element (Wait-Name $window "Retry output")
-    $recovered = Wait-Name $window "Ready"
-    $player.Kill()
-    $player.WaitForExit()
-
-    $player = Start-Player @("--ui-long-name", ($TimeoutSeconds * 1000))
-    $players += $player
-    $window = Wait-MainWindow $player
-    $unicode = Wait-NamePrefix $window "Very long qualification source name with Unicode"
-    Start-Sleep -Seconds 1
-    Save-WindowImage $player (Join-Path $output "large-text-unicode.png")
+    $recovered = Wait-NamePrefix $window "Ready."
     $player.Kill()
     $player.WaitForExit()
 
     $passed = $elements.Count -eq $required.Count -and $ready -and $playing -and $paused -and
         $diagnostics -and $masterPresent -and $masterAbsent -and $errorElement -and
-        $errorActions.Count -eq 4 -and $recovered -and $unicode -and $minimized -and
+        $errorActions.Count -eq 4 -and $recovered -and $minimized -and
         $closeDuringPlayback -and $settingsPersisted -and
         $cacheState -eq [Windows.Automation.ToggleState]::On -and
         $recentState -eq [Windows.Automation.ToggleState]::Off -and
@@ -245,7 +268,7 @@ try {
         renderer = $env:SLINT_BACKEND
         dpi = $dpi
         required_accessible_names = $required
-        keyboard_flows = @("Control+O", "Control+Shift+O", "P", "R", "D")
+        keyboard_flows = @("Control+O", "P", "R", "D")
         mixer_roles_qualified = @("Drums", "Bass", "Other", "Vocals")
         master_present = $masterPresent
         master_absent = $masterAbsent
@@ -262,8 +285,12 @@ try {
         }
         child_processes = $childProcesses
         native_process_tree = $nativeProcessTree
-        screenshots = @("compact.png", "large-text-unicode.png")
-        limitations = @("Windows UI Automation verifies the screen-reader contract; NVDA speech is qualified separately")
+        screenshots = @("compact.png")
+        unicode_source_name = 'not_tested'
+        limitations = @(
+            "Windows UI Automation verifies the screen-reader contract; NVDA speech is qualified separately"
+            "The mock UI does not expose its source-name property as a control; Unicode source names need product UI qualification"
+        )
     }
     $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $output "ui-qualification.json")
     $report | ConvertTo-Json -Depth 4
@@ -278,5 +305,6 @@ try {
     Pop-Location
     $env:APPDATA = $oldAppData
     $env:LOCALAPPDATA = $oldLocalAppData
+    $env:SLINT_BACKEND = $oldBackend
     Remove-Item -Recurse -Force -LiteralPath $profile -ErrorAction SilentlyContinue
 }

@@ -149,10 +149,17 @@ impl MixerRenderer {
         };
         let master_gain = self.master_gain.next();
         let stem_gain = 1.0 - master_gain;
-        let output = [
-            stem[0] * stem_gain + master[0] * master_gain,
-            stem[1] * stem_gain + master[1] * master_gain,
-        ];
+        let output = if master_gain == 0.0 {
+            stem
+        } else if master_gain == 1.0 {
+            master
+        } else {
+            [
+                stem[0] * stem_gain + master[0] * master_gain,
+                stem[1] * stem_gain + master[1] * master_gain,
+            ]
+        };
+        let output = output.map(|sample| self.finite(sample));
         self.output_peak[0] = self.output_peak[0].max(output[0].abs());
         self.output_peak[1] = self.output_peak[1].max(output[1].abs());
         output
@@ -335,6 +342,68 @@ mod tests {
         for _ in 0..20 {
             assert!((mixer.render(&input)[0] - 1.0).abs() < 0.000_001);
         }
+    }
+
+    #[test]
+    fn master_reference_ignores_overflowing_stems_at_exact_endpoints() {
+        let mut mixer = MixerRenderer::new(1_000, true);
+        let input = source([f32::MAX, f32::MAX, 0.0, 0.0], -2.5);
+        assert_eq!(mixer.render(&input), [-2.5; 2]);
+        assert_eq!(mixer.snapshot().non_finite_samples, 0);
+        mixer
+            .set_output_preference(OutputPreference::StemMix)
+            .unwrap();
+        mixer.prime();
+        mixer.set_mute(StemRole::Vocals, true);
+        mixer
+            .set_output_preference(OutputPreference::MasterReference)
+            .unwrap();
+        for _ in 0..19 {
+            assert_eq!(mixer.render(&input), [0.0; 2]);
+        }
+        assert_eq!(mixer.render(&input), [-2.5; 2]);
+        let snapshot = mixer.snapshot();
+        assert_eq!(snapshot.current_master_gain, 1.0);
+        assert_eq!(snapshot.remaining_crossfade_frames, 0);
+        assert_eq!(snapshot.current_linear_gains[3], 0.0);
+        assert_eq!(snapshot.remaining_gain_frames[3], 0);
+        assert_eq!(snapshot.non_finite_samples, 38);
+    }
+
+    #[test]
+    fn stem_mix_ignores_overflowing_master_at_the_crossfade_endpoint() {
+        let mut mixer = MixerRenderer::new(1_000, true);
+        let gain = GainDb::new(GainDb::MAX).unwrap();
+        for role in StemRole::ALL {
+            mixer.set_gain(role, gain);
+        }
+        mixer.prime();
+        mixer
+            .set_output_preference(OutputPreference::StemMix)
+            .unwrap();
+        let input = source([2.5, 0.0, 0.0, 0.0], f32::MAX);
+        for _ in 0..19 {
+            assert_eq!(mixer.render(&input), [0.0; 2]);
+        }
+        assert_eq!(mixer.render(&input), [2.5 * gain.linear(); 2]);
+        let snapshot = mixer.snapshot();
+        assert_eq!(snapshot.current_master_gain, 0.0);
+        assert_eq!(snapshot.remaining_crossfade_frames, 0);
+        assert_eq!(snapshot.non_finite_samples, 38);
+    }
+
+    #[test]
+    fn arithmetic_overflow_is_silenced_without_clipping_finite_output() {
+        let mut mixer = MixerRenderer::new(1_000, false);
+        let overflowing = [f32::MAX, -3.0, f32::MAX, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(mixer.render(&overflowing), [0.0, -3.0]);
+        assert_eq!(mixer.snapshot().output_peak, [0.0, 3.0]);
+        assert_eq!(mixer.snapshot().non_finite_samples, 1);
+        mixer.begin_block();
+        let finite = [f32::MAX, -2.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(mixer.render(&finite), [f32::MAX, -2.5]);
+        assert_eq!(mixer.snapshot().output_peak, [f32::MAX, 2.5]);
+        assert_eq!(mixer.snapshot().non_finite_samples, 1);
     }
 
     #[test]

@@ -1,6 +1,12 @@
 /target/
 /.codegraph/
 __pycache__/
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
 /artifacts/*
 !/artifacts/README.md
 /artifacts/tmp/

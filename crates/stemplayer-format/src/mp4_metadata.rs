@@ -1,4 +1,4 @@
-use crate::BoundedReader;
+use crate::mp4_reader::Mp4Reader;
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
 use stemplayer_domain::{ErrorCode, PlayerError};
@@ -8,7 +8,7 @@ const MAX_METADATA_DEPTH: usize = 16;
 const MAX_METADATA_NODES: usize = 1024;
 
 pub(crate) fn read_metadata(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -28,7 +28,7 @@ pub(crate) fn read_metadata(
 }
 
 pub(crate) fn read_track_name(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -45,7 +45,7 @@ pub(crate) fn read_track_name(
 }
 
 pub(crate) fn read_handler(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,

@@ -1,5 +1,6 @@
-use crate::playlist::{Playlist, discover};
-use crate::studio_controller::StudioController;
+use crate::playlist::Playlist;
+use crate::settings::SettingsStore;
+use crate::studio_controller::{SourceSnapshot, SourceSnapshotSubscription, StudioController};
 use crate::{AppWindow, PlaylistRow};
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -10,22 +11,26 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use stemplayer_domain::{
     BoundedText, CacheCommand, DeviceId, ErrorCategory, OutputPreference, PlayerCommand,
-    PlayerController, PlayerError, PlayerSnapshot, Severity, SnapshotSubscription, SourceFrame,
-    SourceLocator, StemRole, TransportState,
+    PlayerController, PlayerError, PlayerSnapshot, Severity, SourceFrame, SourceLocator, StemRole,
+    TransportState,
 };
 use stemplayer_ui::{CommandAdapter, Playhead};
+
+mod diagnostics;
+mod discovery;
+mod recovery;
 
 const CACHE_LIMITS_MB: [u32; 4] = [64, 256, 1_024, 4_096];
 const COLLAPSED_WINDOW_HEIGHT: f32 = 298.0;
 const NEXT_SOURCE_LEAD_TIME: Duration = Duration::from_secs(5);
-static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-pub fn wire(
+pub(crate) fn wire(
     app: &AppWindow,
     quit_on_end: bool,
-    settings_path: Option<std::path::PathBuf>,
-    settings: &stemplayer_platform::LocalSettings,
+    settings_store: SettingsStore,
+    restore_playlist: bool,
 ) -> Arc<StudioController> {
+    let settings = settings_store.snapshot();
     let cache = stemplayer_platform::AppPaths::discover("stemplayer-native")
         .ok()
         .and_then(|paths| {
@@ -51,13 +56,20 @@ pub fn wire(
     let dropped_paths = Rc::new(RefCell::new(Vec::new()));
     let playlist = Arc::new(Mutex::new(Playlist::default()));
     let playlist_restore_cancelled = Arc::new(AtomicBool::new(false));
+    let discovery_requests = discovery::Requests::default();
     let collapsed_window_height = Rc::new(Cell::new(COLLAPSED_WINDOW_HEIGHT));
-    let device_ids = Arc::new(RwLock::new(Arc::<[Option<DeviceId>]>::from([None])));
-    let device_selection_changed = Arc::new(AtomicBool::new(false));
-    app.set_output_devices(ModelRc::new(VecModel::from(vec![SharedString::from(
-        "System default",
-    )])));
-    app.set_output_device_index(0);
+    let (labels, ids, selected) =
+        output_device_options_from(Vec::new(), settings.selected_device.as_deref());
+    if let Some(device) = ids
+        .get(usize::try_from(selected).unwrap_or_default())
+        .cloned()
+        .flatten()
+    {
+        let _ = controller.submit(PlayerCommand::SelectDevice(Some(device)));
+    }
+    let device_ids = Arc::new(RwLock::new(ids));
+    app.set_output_devices(ModelRc::new(VecModel::from(labels)));
+    app.set_output_device_index(selected);
     app.set_recent_sources(recent_source_model(&settings.recent_sources));
     app.set_recent_sources_enabled(settings.recent_sources_enabled);
     app.set_waveform_cache_enabled(settings.waveform_cache_enabled);
@@ -73,30 +85,32 @@ pub fn wire(
     present(app, &controller.latest_snapshot());
     present_waveform(app, controller.latest_waveform().as_ref());
     let weak = app.as_weak();
-    let current = Arc::clone(&controller);
     let current_device_ids = Arc::clone(&device_ids);
-    let current_device_selection_changed = Arc::clone(&device_selection_changed);
     let selected_device = settings.selected_device.clone();
     std::thread::spawn(move || {
         let (labels, ids, selected) = output_device_options(selected_device.as_deref());
         let _ = weak.upgrade_in_event_loop(move |app| {
+            let previous = usize::try_from(app.get_output_device_index())
+                .ok()
+                .and_then(|index| {
+                    current_device_ids
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .get(index)
+                        .cloned()
+                });
+            let selected = previous
+                .and_then(|previous| ids.iter().position(|device| *device == previous))
+                .and_then(|index| i32::try_from(index).ok())
+                .unwrap_or(selected);
             *current_device_ids
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::clone(&ids);
             app.set_output_devices(ModelRc::new(VecModel::from(labels)));
-            if !current_device_selection_changed.load(Ordering::Acquire) {
-                app.set_output_device_index(selected);
-                if let Some(device) = ids
-                    .get(usize::try_from(selected).unwrap_or_default())
-                    .cloned()
-                    .flatten()
-                {
-                    let _ = current.submit(PlayerCommand::SelectDevice(Some(device)));
-                }
-            }
+            app.set_output_device_index(selected);
         });
     });
-    if !settings.playlist_sources.is_empty() {
+    if restore_playlist && !settings.playlist_sources.is_empty() {
         let sources = settings.playlist_sources.clone();
         let selected = settings.playlist_selected_source.clone();
         let current_playlist = Arc::clone(&playlist);
@@ -127,7 +141,7 @@ pub fn wire(
                 app.set_playlist_items(playlist_model(&rows));
                 app.set_playlist_index(index);
                 if let Some(source) = source {
-                    submit_playlist_source(&current, source, false);
+                    submit_playlist_source(current.as_ref(), source, false);
                 }
             });
         });
@@ -139,8 +153,9 @@ pub fn wire(
     let current_drop_timer = Rc::clone(&drop_timer);
     let current_dropped_paths = Rc::clone(&dropped_paths);
     let current_playlist_restore_cancelled = Arc::clone(&playlist_restore_cancelled);
+    let current_discovery_requests = discovery_requests.clone();
     let current_collapsed_window_height = Rc::clone(&collapsed_window_height);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     app.window().on_winit_window_event(move |window, event| {
         match event {
             WindowEvent::DroppedFile(path) => {
@@ -151,17 +166,19 @@ pub fn wire(
                 let playlist = Arc::clone(&current_playlist);
                 let weak = weak.clone();
                 let controller = Arc::clone(&current_controller);
-                let settings_path = current_settings.clone();
+                let settings_store = current_settings.clone();
+                let request = current_discovery_requests.begin();
                 current_drop_timer.start(
                     TimerMode::SingleShot,
                     Duration::from_millis(75),
                     move || {
-                        discover_playlist_async(
+                        discovery::start(
                             std::mem::take(&mut *paths.borrow_mut()),
                             Arc::clone(&playlist),
                             weak.clone(),
                             controller.clone(),
-                            settings_path.clone(),
+                            settings_store.clone(),
+                            Arc::clone(&request),
                         );
                     },
                 );
@@ -222,21 +239,24 @@ pub fn wire(
     let weak = app.as_weak();
     let current_playlist = Arc::clone(&playlist);
     let current = Arc::clone(&controller);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     let current_playlist_restore_cancelled = Arc::clone(&playlist_restore_cancelled);
+    let current_discovery_requests = discovery_requests.clone();
     app.on_open_folder(move || {
-        spawn_playlist_picker(
+        discovery::spawn_picker(
             Arc::clone(&current_playlist),
             weak.clone(),
             Arc::clone(&current),
             current_settings.clone(),
-            Arc::clone(&current_playlist_restore_cancelled),
+            &current_playlist_restore_cancelled,
+            &current_discovery_requests,
         );
     });
 
     let weak = app.as_weak();
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_select_playlist_item(move |index, control, shift| {
         let changed = usize::try_from(index).is_ok_and(|index| {
             current_playlist
@@ -245,14 +265,34 @@ pub fn wire(
                 .select(index, control, shift)
         });
         if changed {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
+            persist_playlist(&current_settings, &current_playlist);
         }
     });
 
     let weak = app.as_weak();
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
+    app.on_navigate_playlist_item(move |index, control, shift| {
+        let changed = usize::try_from(index).is_ok_and(|index| {
+            current_playlist
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .navigate(index, control, shift)
+        });
+        if changed {
+            current_discovery_requests.cancel();
+            present_playlist(&weak, &current_playlist);
+            persist_playlist(&current_settings, &current_playlist);
+        }
+    });
+
+    let weak = app.as_weak();
+    let current_playlist = Arc::clone(&playlist);
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_context_select_playlist_item(move |index| {
         let changed = usize::try_from(index).is_ok_and(|index| {
             current_playlist
@@ -261,14 +301,17 @@ pub fn wire(
                 .select_context(index)
         });
         if changed {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
+            persist_playlist(&current_settings, &current_playlist);
         }
     });
 
     let weak = app.as_weak();
     let current_playlist = Arc::clone(&playlist);
+    let current_discovery_requests = discovery_requests.clone();
     app.on_select_all_playlist_items(move || {
+        current_discovery_requests.cancel();
         current_playlist
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -278,21 +321,24 @@ pub fn wire(
 
     let weak = app.as_weak();
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_remove_playlist_items(move || {
         let changed = current_playlist
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove_selected();
         if changed {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
+            persist_playlist(&current_settings, &current_playlist);
         }
     });
 
     let weak = app.as_weak();
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_reorder_playlist_item(move |from, to| {
         let changed = usize::try_from(from)
             .ok()
@@ -304,15 +350,17 @@ pub fn wire(
                     .move_item(from, to)
             });
         if changed {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
+            persist_playlist(&current_settings, &current_playlist);
         }
     });
 
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_activate_playlist_item(move |index| {
         let path = usize::try_from(index).ok().and_then(|index| {
             current_playlist
@@ -321,16 +369,18 @@ pub fn wire(
                 .activate(index)
         });
         if let Some(path) = path {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
-            submit_playlist_source(&current, path, true);
+            persist_playlist(&current_settings, &current_playlist);
+            submit_playlist_source(current.as_ref(), path, true);
         }
     });
 
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_previous_track(move || {
         let path = current_playlist
             .lock()
@@ -338,16 +388,18 @@ pub fn wire(
             .previous()
             .map(|(_, path)| path);
         if let Some(path) = path {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
-            submit_playlist_source(&current, path, true);
+            persist_playlist(&current_settings, &current_playlist);
+            submit_playlist_source(current.as_ref(), path, true);
         }
     });
 
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
+    let current_discovery_requests = discovery_requests.clone();
     app.on_next_track(move || {
         let path = current_playlist
             .lock()
@@ -355,9 +407,10 @@ pub fn wire(
             .next()
             .map(|(_, path)| path);
         if let Some(path) = path {
+            current_discovery_requests.cancel();
             present_playlist(&weak, &current_playlist);
-            persist_playlist(current_settings.as_deref(), &current_playlist);
-            submit_playlist_source(&current, path, true);
+            persist_playlist(&current_settings, &current_playlist);
+            submit_playlist_source(current.as_ref(), path, true);
         }
     });
 
@@ -383,61 +436,62 @@ pub fn wire(
 
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     let current_playlist_restore_cancelled = Arc::clone(&playlist_restore_cancelled);
+    let current_discovery_requests = discovery_requests.clone();
     app.on_open_url(move |url| {
         current_playlist_restore_cancelled.store(true, Ordering::Release);
-        submit_url(&current, &weak, current_settings.as_deref(), url.as_str());
+        current_discovery_requests.cancel();
+        submit_url(&current, &weak, &current_settings, url.as_str());
     });
 
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     let current_playlist_restore_cancelled = Arc::clone(&playlist_restore_cancelled);
+    let current_discovery_requests = discovery_requests.clone();
     app.on_open_recent(move |index| {
-        let Some(source) = current_settings.as_deref().and_then(|settings_path| {
-            usize::try_from(index).ok().and_then(|index| {
-                stemplayer_platform::load_settings(settings_path)
-                    .settings()
-                    .recent_sources
-                    .get(index)
-                    .cloned()
-            })
+        let Some(source) = usize::try_from(index).ok().and_then(|index| {
+            current_settings
+                .snapshot()
+                .recent_sources
+                .get(index)
+                .cloned()
         }) else {
             return;
         };
         current_playlist_restore_cancelled.store(true, Ordering::Release);
-        if source.starts_with("https://") || source.starts_with("http://") {
-            submit_url(&current, &weak, current_settings.as_deref(), &source);
+        current_discovery_requests.cancel();
+        if crate::recent_sources::is_url(&source) {
+            submit_url(&current, &weak, &current_settings, &source);
         } else {
-            submit_source(&current, &weak, current_settings.as_deref(), source.into());
+            submit_source(&current, &weak, &current_settings, source.into());
         }
     });
 
     let weak = app.as_weak();
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     app.on_clear_recent(move || {
-        if let Some(settings) = update_settings(current_settings.as_deref(), |current| {
-            current.without_recent_sources()
-        }) && let Some(app) = weak.upgrade()
+        if let Some(settings) = current_settings.update(|current| current.without_recent_sources())
+            && let Some(app) = weak.upgrade()
         {
             app.set_recent_sources(recent_source_model(&settings.recent_sources));
         }
     });
 
     let weak = app.as_weak();
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     app.on_set_recent_sources_enabled(move |enabled| {
-        if let Some(settings) = update_settings(current_settings.as_deref(), |current| {
-            current.with_recent_sources_enabled(enabled)
-        }) && let Some(app) = weak.upgrade()
+        if let Some(settings) =
+            current_settings.update(|current| current.with_recent_sources_enabled(enabled))
+            && let Some(app) = weak.upgrade()
         {
             app.set_recent_sources(recent_source_model(&settings.recent_sources));
         }
     });
 
     let current = Arc::clone(&controller);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     app.on_set_waveform_cache_enabled(move |enabled| {
         let command = if enabled {
             CacheCommand::Enable
@@ -445,16 +499,14 @@ pub fn wire(
             CacheCommand::Disable
         };
         let _ = current.submit(PlayerCommand::Cache(command));
-        let _ = update_settings(current_settings.as_deref(), |current| {
-            stemplayer_platform::LocalSettings {
-                waveform_cache_enabled: enabled,
-                ..current.clone()
-            }
+        let _ = current_settings.update(|current| stemplayer_platform::LocalSettings {
+            waveform_cache_enabled: enabled,
+            ..current.clone()
         });
     });
 
     let current = Arc::clone(&controller);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     app.on_set_waveform_cache_limit(move |index| {
         let Some(limit_mb) = usize::try_from(index)
             .ok()
@@ -466,11 +518,9 @@ pub fn wire(
         let _ = current.submit(PlayerCommand::Cache(CacheCommand::SetCapacityBytes(
             u64::from(limit_mb) * 1024 * 1024,
         )));
-        let _ = update_settings(current_settings.as_deref(), |current| {
-            stemplayer_platform::LocalSettings {
-                waveform_cache_limit_mb: limit_mb,
-                ..current.clone()
-            }
+        let _ = current_settings.update(|current| stemplayer_platform::LocalSettings {
+            waveform_cache_limit_mb: limit_mb,
+            ..current.clone()
         });
     });
 
@@ -489,35 +539,18 @@ pub fn wire(
         let _ = current.submit(PlayerCommand::Cache(CacheCommand::ClearNetworkSource));
     });
 
+    diagnostics::wire(app, Arc::clone(&controller));
+
     let weak = app.as_weak();
     let current = Arc::clone(&controller);
-    app.on_export_diagnostics(move || {
-        let Some(path) = choose_diagnostics_export() else {
-            return;
-        };
-        let result = diagnostics_json(&current.latest_snapshot())
-            .and_then(|json| std::fs::write(path, json).map_err(serde_json::Error::io));
-        if let Some(app) = weak.upgrade() {
-            app.set_diagnostics_export_status(
-                if result.is_ok() {
-                    "Exported"
-                } else {
-                    "Export failed"
-                }
-                .into(),
-            );
-        }
-    });
-
-    let current = Arc::clone(&controller);
     let current_playlist = Arc::clone(&playlist);
+    let current_discovery_requests = discovery_requests.clone();
     app.on_play(move || {
-        let path = current_playlist
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .activate_selected_if_changed();
+        current_discovery_requests.cancel();
+        let snapshot = current.latest_snapshot();
+        let path = activate_playlist_for_play(&weak, &current_playlist, &snapshot);
         if let Some(path) = path {
-            submit_playlist_source(&current, path, true);
+            submit_playlist_source(current.as_ref(), path, true);
         } else {
             let _ = current.submit(PlayerCommand::Play);
         }
@@ -557,16 +590,7 @@ pub fn wire(
             } else {
                 return;
             }
-            if !gain_timer_for_preview.running() {
-                let commands_for_tick = Arc::clone(&commands_for_gain);
-                gain_timer_for_preview.start(
-                    TimerMode::Repeated,
-                    Duration::from_millis(16),
-                    move || {
-                        let _ = commands_for_tick.flush();
-                    },
-                );
-            }
+            schedule_gain_flush(&gain_timer_for_preview, Arc::clone(&commands_for_gain));
         }
     });
 
@@ -605,49 +629,45 @@ pub fn wire(
 
     let current = Arc::clone(&controller);
     let device_ids_for_selection = Arc::clone(&device_ids);
-    let device_selection_changed_for_selection = Arc::clone(&device_selection_changed);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     app.on_select_output_device(move |index| {
-        device_selection_changed_for_selection.store(true, Ordering::Release);
-        let device = usize::try_from(index)
-            .ok()
-            .and_then(|index| {
-                device_ids_for_selection
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(index)
-                    .cloned()
-            })
-            .flatten();
+        let Some(device) = usize::try_from(index).ok().and_then(|index| {
+            device_ids_for_selection
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(index)
+                .cloned()
+        }) else {
+            return;
+        };
         let _ = current.submit(PlayerCommand::SelectDevice(device.clone()));
-        let _ = update_settings(current_settings.as_deref(), |current| {
-            stemplayer_platform::LocalSettings {
-                selected_device: device.map(|value| value.as_str().to_owned()),
-                ..current.clone()
-            }
+        let _ = current_settings.update(|current| stemplayer_platform::LocalSettings {
+            selected_device: device.map(|value| value.as_str().to_owned()),
+            ..current.clone()
         });
     });
 
     let current = Arc::clone(&controller);
     let device_ids_for_retry = Arc::clone(&device_ids);
-    let device_selection_changed_for_retry = Arc::clone(&device_selection_changed);
     app.on_retry_device(move |index| {
-        device_selection_changed_for_retry.store(true, Ordering::Release);
-        let device = usize::try_from(index)
-            .ok()
-            .and_then(|index| {
-                device_ids_for_retry
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(index)
-                    .cloned()
-            })
-            .flatten();
+        let Some(device) = usize::try_from(index).ok().and_then(|index| {
+            device_ids_for_retry
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(index)
+                .cloned()
+        }) else {
+            return;
+        };
         let _ = current.submit(PlayerCommand::SelectDevice(device));
     });
 
     let current = Arc::clone(&controller);
+    let current_playlist_restore_cancelled = Arc::clone(&playlist_restore_cancelled);
+    let current_discovery_requests = discovery_requests.clone();
     app.on_reset_player(move || {
+        current_playlist_restore_cancelled.store(true, Ordering::Release);
+        current_discovery_requests.cancel();
         let _ = current.submit(PlayerCommand::Unload);
     });
 
@@ -677,19 +697,20 @@ pub fn wire(
         }
     });
 
-    let subscription = controller.subscribe();
+    let subscription = controller.subscribe_source_snapshots();
     let weak = app.as_weak();
     let authoritative_playhead = Arc::clone(&playhead);
     let waveform_controller = Arc::clone(&controller);
     let current_playlist = Arc::clone(&playlist);
-    let current_settings = settings_path.clone();
+    let current_settings = settings_store.clone();
     std::thread::spawn(move || {
         let mut presented_waveform =
             waveform_revision(waveform_controller.latest_waveform().as_ref());
-        let mut previous_state = waveform_controller.latest_snapshot().transport_state();
+        let mut previous_state = None;
         let mut reported_notice = None;
         loop {
-            let snapshot = receive_snapshot(&subscription, Duration::from_secs(60));
+            let evidence = receive_snapshot(&subscription, Duration::from_secs(60));
+            let snapshot = evidence.snapshot().clone();
             if snapshot.generation() != waveform_controller.latest_snapshot().generation() {
                 continue;
             }
@@ -726,37 +747,38 @@ pub fn wire(
                 notice.is_some() && snapshot.transport_state() == TransportState::Error;
             let ended = !quit_on_end
                 && current_playlist_source
-                && previous_state != TransportState::Ended
-                && snapshot.transport_state() == TransportState::Ended;
-            let next = if source_failed && current_playlist_source {
-                current_playlist
+                && recovery::is_new_end(previous_state, &snapshot);
+            let recovered = if source_failed || ended {
+                let mut playlist = current_playlist
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .next_after_error()
-            } else if ended {
-                current_playlist
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .next()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if waveform_controller.latest_snapshot().generation() != snapshot.generation() {
+                    false
+                } else {
+                    let playlist_source = playlist
+                        .active_source()
+                        .as_deref()
+                        .is_some_and(|path| waveform_controller.current_source_is(path));
+                    let play = !source_failed || waveform_controller.play_requested();
+                    recovery::admit_playlist_recovery(
+                        &mut playlist,
+                        playlist_source,
+                        source_failed,
+                        play,
+                        |source, play| {
+                            waveform_controller.submit_source_recovery(&evidence, source, play)
+                        },
+                    )
+                    .unwrap_or(false)
+                }
             } else {
-                None
+                false
             };
-            previous_state = snapshot.transport_state();
-            if next.is_some() {
-                persist_playlist(current_settings.as_deref(), &current_playlist);
+            previous_state = Some((snapshot.generation(), snapshot.transport_state()));
+            if recovered {
+                persist_playlist(&current_settings, &current_playlist);
             }
-            if let Some((_, path)) = &next {
-                let play = !source_failed || waveform_controller.play_requested();
-                submit_playlist_source(&waveform_controller, path.clone(), play);
-            } else if source_failed {
-                let _ = waveform_controller.submit(PlayerCommand::Unload);
-            }
-            let playlist_rows = next.as_ref().map(|_| {
-                current_playlist
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .rows()
-            });
+            let presented_playlist = Arc::clone(&current_playlist);
             let playhead = Arc::clone(&authoritative_playhead);
             let waveform = waveform_controller.latest_waveform();
             let revision = waveform_revision(waveform.as_ref());
@@ -775,9 +797,8 @@ pub fn wire(
                     if waveform_changed {
                         present_waveform(&app, waveform.as_ref());
                     }
-                    if let Some((index, _)) = next {
-                        app.set_playlist_items(playlist_model(&playlist_rows.unwrap_or_default()));
-                        app.set_playlist_index(i32::try_from(index).unwrap_or_default());
+                    if recovered {
+                        present_playlist(&app.as_weak(), &presented_playlist);
                     }
                     if finished {
                         let _ = slint::quit_event_loop();
@@ -797,9 +818,9 @@ pub fn wire(
 }
 
 fn receive_snapshot(
-    subscription: &SnapshotSubscription,
+    subscription: &SourceSnapshotSubscription,
     timeout: Duration,
-) -> stemplayer_domain::PlayerSnapshot {
+) -> SourceSnapshot {
     loop {
         if let Some(snapshot) = subscription.recv_timeout(timeout) {
             return snapshot;
@@ -1020,12 +1041,34 @@ fn role(index: i32) -> Option<StemRole> {
         .and_then(|value| StemRole::ALL.get(value).copied())
 }
 
+fn schedule_gain_flush(timer: &Timer, commands: Arc<CommandAdapter>) {
+    if !timer.running() {
+        timer.start(
+            TimerMode::SingleShot,
+            Duration::from_millis(16),
+            move || {
+                let _ = commands.flush();
+            },
+        );
+    }
+}
+
 fn output_device_options(
     selected_device: Option<&str>,
 ) -> (Vec<SharedString>, Arc<[Option<DeviceId>]>, i32) {
-    let devices = stemplayer_output::enumerate_devices()
-        .unwrap_or_default()
+    output_device_options_from(
+        stemplayer_output::enumerate_devices().unwrap_or_default(),
+        selected_device,
+    )
+}
+
+fn output_device_options_from(
+    devices: Vec<stemplayer_output::DeviceReport>,
+    selected_device: Option<&str>,
+) -> (Vec<SharedString>, Arc<[Option<DeviceId>]>, i32) {
+    let devices = devices
         .into_iter()
+        .filter(|device| device.stereo_supported)
         .filter_map(|device| {
             let id = DeviceId::new(device.id).ok()?;
             let name = device.name.chars().take(96).collect::<String>();
@@ -1035,29 +1078,35 @@ fn output_device_options(
             Some((SharedString::from(label), id))
         })
         .collect::<Vec<_>>();
-    let labels = std::iter::once(SharedString::from("System default"))
+    let mut labels: Vec<_> = std::iter::once(SharedString::from("System default"))
         .chain(devices.iter().map(|(label, _)| label.clone()))
         .collect();
-    let ids = std::iter::once(None)
+    let mut ids = std::iter::once(None)
         .chain(devices.into_iter().map(|(_, id)| Some(id)))
         .collect::<Vec<_>>();
-    let selected = selected_device
-        .and_then(|selected| {
-            ids.iter().position(|device| {
+    let selected = selected_device.map_or(0, |selected| {
+        ids.iter()
+            .position(|device| {
                 device
                     .as_ref()
                     .is_some_and(|device| device.as_str() == selected)
             })
-        })
-        .and_then(|index| i32::try_from(index).ok())
-        .unwrap_or_default();
+            .unwrap_or_else(|| {
+                let device = DeviceId::new(selected)
+                    .unwrap_or_else(|_| DeviceId::truncated("unavailable-saved-output"));
+                labels.push("Saved output unavailable".into());
+                ids.push(Some(device));
+                ids.len() - 1
+            })
+    });
+    let selected = i32::try_from(selected).unwrap_or(-1);
     (labels, ids.into(), selected)
 }
 
 fn submit_source(
     controller: &StudioController,
     window: &slint::Weak<AppWindow>,
-    settings_path: Option<&std::path::Path>,
+    settings_store: &SettingsStore,
     path: std::path::PathBuf,
 ) {
     let Some(value) = path.to_str() else {
@@ -1072,95 +1121,11 @@ fn submit_source(
     {
         return;
     }
-    if let Some(settings) =
-        update_settings(settings_path, |current| current.with_recent_source(value))
+    if let Some(settings) = settings_store.update(|current| current.with_recent_source(value))
         && let Some(app) = window.upgrade()
     {
         app.set_recent_source_index(0);
         app.set_recent_sources(recent_source_model(&settings.recent_sources));
-    }
-}
-
-fn spawn_playlist_picker(
-    playlist: Arc<Mutex<Playlist>>,
-    window: slint::Weak<AppWindow>,
-    controller: Arc<StudioController>,
-    settings_path: Option<std::path::PathBuf>,
-    restore_cancelled: Arc<AtomicBool>,
-) {
-    let Some(paths) = choose_sources() else {
-        return;
-    };
-    restore_cancelled.store(true, Ordering::Release);
-    std::thread::spawn(move || {
-        apply_playlist(
-            discover(&paths),
-            playlist,
-            window,
-            controller,
-            settings_path,
-        );
-    });
-}
-fn discover_playlist_async(
-    paths: Vec<std::path::PathBuf>,
-    playlist: Arc<Mutex<Playlist>>,
-    window: slint::Weak<AppWindow>,
-    controller: Arc<StudioController>,
-    settings_path: Option<std::path::PathBuf>,
-) {
-    std::thread::spawn(move || {
-        apply_playlist(
-            discover(&paths),
-            playlist,
-            window,
-            controller,
-            settings_path,
-        );
-    });
-}
-
-fn apply_playlist(
-    items: Result<Vec<crate::playlist::PlaylistItem>, PlayerError>,
-    playlist: Arc<Mutex<Playlist>>,
-    window: slint::Weak<AppWindow>,
-    controller: Arc<StudioController>,
-    settings_path: Option<std::path::PathBuf>,
-) {
-    let items = match items {
-        Ok(items) => items,
-        Err(error) => {
-            let snapshot = playlist_error_snapshot(controller.latest_snapshot(), error);
-            let _ = window.upgrade_in_event_loop(move |app| {
-                present(&app, &source_notice_snapshot(&snapshot));
-                if let Some(notice) = source_notice(&snapshot) {
-                    show_source_notice(&app, notice);
-                }
-            });
-            return;
-        }
-    };
-    let (rows, selected, initial_source) = {
-        let mut playlist = playlist
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let initial_source = playlist.append(items);
-        (
-            playlist.rows(),
-            playlist
-                .selected()
-                .and_then(|index| i32::try_from(index).ok())
-                .unwrap_or(-1),
-            initial_source,
-        )
-    };
-    persist_playlist(settings_path.as_deref(), &playlist);
-    let _ = window.upgrade_in_event_loop(move |app| {
-        app.set_playlist_items(playlist_model(&rows));
-        app.set_playlist_index(selected);
-    });
-    if let Some(source) = initial_source {
-        submit_playlist_source(&controller, source, false);
     }
 }
 
@@ -1173,7 +1138,7 @@ fn playlist_error_snapshot(
     snapshot.with_details(details)
 }
 
-fn submit_playlist_source(controller: &StudioController, path: std::path::PathBuf, play: bool) {
+fn submit_playlist_source(controller: &dyn PlayerController, path: std::path::PathBuf, play: bool) {
     let Some(value) = path.to_str() else {
         return;
     };
@@ -1192,10 +1157,19 @@ fn submit_playlist_source(controller: &StudioController, path: std::path::PathBu
 fn submit_url(
     controller: &StudioController,
     window: &slint::Weak<AppWindow>,
-    settings_path: Option<&std::path::Path>,
+    settings_store: &SettingsStore,
     value: &str,
 ) {
-    let Ok(locator) = BoundedText::new(value) else {
+    let value = match crate::recent_sources::validated_url(value) {
+        Ok(value) => value,
+        Err(error) => {
+            if let Some(app) = window.upgrade() {
+                show_source_notice(&app, error.summary.to_string());
+            }
+            return;
+        }
+    };
+    let Ok(locator) = BoundedText::new(&value) else {
         return;
     };
     if controller
@@ -1204,8 +1178,7 @@ fn submit_url(
     {
         return;
     }
-    if let Some(settings) =
-        update_settings(settings_path, |current| current.with_recent_source(value))
+    if let Some(settings) = settings_store.update(|current| current.with_recent_source(&value))
         && let Some(app) = window.upgrade()
     {
         app.set_recent_source_index(0);
@@ -1213,28 +1186,12 @@ fn submit_url(
     }
 }
 
-fn update_settings(
-    path: Option<&std::path::Path>,
-    update: impl FnOnce(&stemplayer_platform::LocalSettings) -> stemplayer_platform::LocalSettings,
-) -> Option<stemplayer_platform::LocalSettings> {
-    let path = path?;
-    let _guard = SETTINGS_WRITE_LOCK
+fn persist_playlist(settings: &SettingsStore, playlist: &Arc<Mutex<Playlist>>) {
+    let playlist = playlist
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let settings = update(stemplayer_platform::load_settings(path).settings());
-    stemplayer_platform::save_settings(path, &settings)
-        .ok()
-        .map(|()| settings)
-}
-
-fn persist_playlist(path: Option<&std::path::Path>, playlist: &Arc<Mutex<Playlist>>) {
-    let (sources, selected) = {
-        let playlist = playlist
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (playlist.sources(), playlist.selected_source())
-    };
-    let _ = update_settings(path, |settings| settings.with_playlist(sources, selected));
+    let _ = settings
+        .update(|settings| settings.with_playlist(playlist.sources(), playlist.selected_source()));
 }
 
 fn recent_source_model(sources: &[String]) -> ModelRc<SharedString> {
@@ -1278,6 +1235,32 @@ fn present_playlist(window: &slint::Weak<AppWindow>, playlist: &Arc<Mutex<Playli
     }
 }
 
+fn activate_playlist_for_play(
+    window: &slint::Weak<AppWindow>,
+    playlist: &Arc<Mutex<Playlist>>,
+    snapshot: &PlayerSnapshot,
+) -> Option<std::path::PathBuf> {
+    let source_failed = snapshot.transport_state() == TransportState::Error
+        && snapshot.details().error.as_ref().is_some_and(|error| {
+            matches!(error.severity, Severity::Error | Severity::Fatal)
+                && matches!(
+                    error.category,
+                    ErrorCategory::Source | ErrorCategory::Timeline | ErrorCategory::Network
+                )
+        });
+    let source_loaded = !source_failed
+        && (snapshot.source().is_some()
+            || snapshot.transport_state() == TransportState::Inspecting);
+    let source = playlist
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .activate_for_play(source_loaded);
+    if source.is_some() {
+        present_playlist(window, playlist);
+    }
+    source
+}
+
 fn playlist_model(items: &[(String, bool)]) -> ModelRc<PlaylistRow> {
     ModelRc::new(VecModel::from(
         items
@@ -1291,46 +1274,7 @@ fn playlist_model(items: &[(String, bool)]) -> ModelRc<PlaylistRow> {
 }
 
 fn recent_source_label(value: &str) -> SharedString {
-    if let Some(authority) = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-        .and_then(|value| value.split('/').next())
-    {
-        return SharedString::from(format!("HLS ({authority})"));
-    }
-    let path = std::path::Path::new(value);
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Local source");
-    let parent = path
-        .parent()
-        .and_then(std::path::Path::file_name)
-        .and_then(|value| value.to_str());
-    parent.map_or_else(
-        || SharedString::from(name.chars().take(96).collect::<String>()),
-        |parent| {
-            SharedString::from(
-                format!("{name} ({parent})")
-                    .chars()
-                    .take(96)
-                    .collect::<String>(),
-            )
-        },
-    )
-}
-
-fn diagnostics_json(
-    snapshot: &stemplayer_domain::PlayerSnapshot,
-) -> Result<Vec<u8>, serde_json::Error> {
-    let mut value = serde_json::to_value(snapshot)?;
-    if let Some(source) = value
-        .get_mut("source")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        source.remove("display_name");
-    }
-    serde_json::to_vec_pretty(&value)
+    crate::recent_sources::label(value).into()
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -1349,19 +1293,8 @@ fn choose_sources() -> Option<Vec<std::path::PathBuf>> {
     std::env::var_os("STEMPLAYER_SOURCE").map(|path| vec![path.into()])
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn choose_diagnostics_export() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new()
-        .set_title("Export diagnostics")
-        .set_file_name("stemplayer-diagnostics.json")
-        .add_filter("JSON", &["json"])
-        .save_file()
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn choose_diagnostics_export() -> Option<std::path::PathBuf> {
-    std::env::var_os("STEMPLAYER_DIAGNOSTICS_EXPORT").map(std::path::PathBuf::from)
-}
+#[cfg(test)]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1392,10 +1325,41 @@ mod tests {
     }
 
     #[test]
-    fn output_device_selection_falls_back_to_default() {
-        let (_, ids, selected) = output_device_options(Some("missing-device"));
+    fn missing_and_legacy_saved_outputs_never_select_system_default() {
+        for saved in ["endpoint-v1-missing", "device-1", &"x".repeat(129)] {
+            let (_, ids, selected) = output_device_options_from(Vec::new(), Some(saved));
+            assert_eq!(selected, 1);
+            assert!(ids[1].is_some());
+            assert_eq!(ids[0], None);
+        }
+        let (_, ids, selected) = output_device_options_from(Vec::new(), None);
         assert_eq!(selected, 0);
-        assert_eq!(ids.first(), Some(&None));
+        assert_eq!(ids.as_ref(), &[None]);
+    }
+
+    #[test]
+    fn saved_output_identity_survives_reordering() {
+        let report = |id: &str| stemplayer_output::DeviceReport {
+            id: id.into(),
+            name: "Synthetic output".into(),
+            is_default: false,
+            default_configuration: None,
+            supported_configurations: vec![],
+            stereo_supported: true,
+        };
+        for devices in [
+            vec![report("endpoint-v1-first"), report("endpoint-v1-second")],
+            vec![report("endpoint-v1-second"), report("endpoint-v1-first")],
+        ] {
+            let (_, ids, selected) = output_device_options_from(devices, Some("endpoint-v1-first"));
+            assert_eq!(
+                ids[usize::try_from(selected).unwrap()]
+                    .as_ref()
+                    .unwrap()
+                    .as_str(),
+                "endpoint-v1-first"
+            );
+        }
     }
 
     #[test]
@@ -1507,31 +1471,6 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_export_redacts_source_name() {
-        let source = stemplayer_domain::SourceMetadata {
-            display_name: stemplayer_domain::DisplayName::truncated("private-track.stem.m4a"),
-            kind: stemplayer_domain::SourceKind::LocalStemContainer,
-            has_master: true,
-            sample_rate: stemplayer_domain::SampleRate::new(48_000).unwrap(),
-            channel_count: stemplayer_domain::ChannelCount::new(10).unwrap(),
-            start_frame: SourceFrame::new(0),
-            end_frame_exclusive: SourceFrame::new(48_000),
-        };
-        let snapshot = stemplayer_domain::PlayerSnapshot::new(
-            TransportState::Ready,
-            stemplayer_domain::GenerationId::INITIAL,
-            None,
-            Some(source),
-            vec![],
-        )
-        .unwrap();
-        let json = String::from_utf8(diagnostics_json(&snapshot).unwrap()).unwrap();
-        assert!(!json.contains("private-track"));
-        assert!(json.contains("sample_rate"));
-        assert!(json.contains("waveform_cache"));
-    }
-
-    #[test]
     fn next_source_preparation_starts_only_in_the_last_five_playing_seconds() {
         let source = stemplayer_domain::SourceMetadata {
             display_name: stemplayer_domain::DisplayName::truncated("track.wav"),
@@ -1572,15 +1511,17 @@ mod tests {
 
     #[test]
     fn snapshot_listener_survives_idle_timeouts() {
-        let (publisher, subscription) = SnapshotSubscription::coalescing();
+        let controller = StudioController::new();
+        let subscription = controller.subscribe_source_snapshots();
         let sender = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
-            publisher.publish(stemplayer_domain::PlayerSnapshot::empty(
-                TransportState::Ready,
-            ));
+            controller.shutdown_and_join();
         });
         let snapshot = receive_snapshot(&subscription, Duration::from_millis(1));
         sender.join().unwrap();
-        assert_eq!(snapshot.transport_state(), TransportState::Ready);
+        assert_eq!(
+            snapshot.snapshot().transport_state(),
+            TransportState::Closed
+        );
     }
 }

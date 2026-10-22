@@ -13,7 +13,7 @@ pub struct PlaylistItem {
     pub source: PathBuf,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Playlist {
     items: Vec<PlaylistItem>,
     selected: BTreeSet<usize>,
@@ -29,6 +29,34 @@ pub struct Playlist {
 impl Playlist {
     pub fn append(&mut self, items: Vec<PlaylistItem>) -> Option<PathBuf> {
         let first_new_index = self.items.len();
+        let activate_initial = self.active.is_none() && self.focus.is_none();
+        let first_requested = items
+            .first()
+            .filter(|_| activate_initial)
+            .map(|item| item.source.clone());
+        self.extend(items);
+        let selected = (first_new_index < self.items.len())
+            .then_some(first_new_index)
+            .or_else(|| {
+                first_requested
+                    .and_then(|source| self.items.iter().position(|item| item.source == source))
+            });
+        if let Some(index) = selected {
+            self.select(index, false, false);
+            if activate_initial {
+                return self.activate(index);
+            }
+        }
+        self.rebuild_shuffle();
+        None
+    }
+
+    pub fn append_preserving_selection(&mut self, items: Vec<PlaylistItem>) {
+        self.extend(items);
+        self.rebuild_shuffle();
+    }
+
+    fn extend(&mut self, items: Vec<PlaylistItem>) {
         let mut seen = self
             .items
             .iter()
@@ -41,14 +69,6 @@ impl Playlist {
                 .filter(|item| seen.insert(item.source.clone()))
                 .take(available),
         );
-        if first_new_index < self.items.len() {
-            self.select(first_new_index, false, false);
-            if first_new_index == 0 {
-                return self.activate(0);
-            }
-        }
-        self.rebuild_shuffle();
-        None
     }
 
     pub fn restore(sources: &[String], selected_source: Option<&str>) -> Self {
@@ -147,6 +167,18 @@ impl Playlist {
         }
     }
 
+    pub fn navigate(&mut self, index: usize, control: bool, shift: bool) -> bool {
+        if index >= self.items.len() {
+            return false;
+        }
+        if control && !shift {
+            self.focus = Some(index);
+            true
+        } else {
+            self.select(index, control, shift)
+        }
+    }
+
     pub fn select_all(&mut self) {
         self.selected = (0..self.items.len()).collect();
         self.focus = self.focus.or_else(|| (!self.items.is_empty()).then_some(0));
@@ -174,8 +206,8 @@ impl Playlist {
         self.activate(self.focus?)
     }
 
-    pub fn activate_selected_if_changed(&mut self) -> Option<PathBuf> {
-        (self.focus != self.active)
+    pub fn activate_for_play(&mut self, source_loaded: bool) -> Option<PathBuf> {
+        (!source_loaded || self.focus != self.active)
             .then(|| self.activate_selected())
             .flatten()
     }
@@ -196,7 +228,10 @@ impl Playlist {
     fn next_with_repeat(&mut self, repeat: bool) -> Option<(usize, PathBuf)> {
         let active = self.active?;
         let index = self.next_index(repeat, true)?;
-        if index != active {
+        if self.shuffle && index != active {
+            if self.history.len() == MAX_PLAYLIST_ITEMS {
+                self.history.remove(0);
+            }
             self.history.push(active);
         }
         let source = self.activate_index(index)?;
@@ -624,7 +659,11 @@ mod tests {
             playlist.activate_selected(),
             Some(PathBuf::from("track.stem.m4a"))
         );
-        assert_eq!(playlist.activate_selected_if_changed(), None);
+        assert_eq!(playlist.activate_for_play(true), None);
+        assert_eq!(
+            playlist.activate_for_play(false),
+            Some(PathBuf::from("track.stem.m4a"))
+        );
     }
 
     #[test]
@@ -734,6 +773,46 @@ mod tests {
         assert_eq!(playlist.selected, BTreeSet::from([1, 2, 4, 5]));
         playlist.select_all();
         assert_eq!(playlist.selected, BTreeSet::from([0, 1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn keyboard_navigation_preserves_selection_and_range_anchor() {
+        let mut playlist = Playlist::default();
+        playlist.append((0..6).map(item).collect());
+        playlist.select(1, false, false);
+
+        assert!(playlist.navigate(3, true, false));
+        assert_eq!(playlist.selected(), Some(3));
+        assert_eq!(playlist.selected, BTreeSet::from([1]));
+        assert!(playlist.navigate(4, false, true));
+        assert_eq!(playlist.selected, BTreeSet::from([1, 2, 3, 4]));
+        assert!(playlist.navigate(0, true, true));
+        assert_eq!(playlist.selected, BTreeSet::from([0, 1, 2, 3, 4]));
+        assert!(!playlist.navigate(6, false, false));
+        assert_eq!(playlist.selected(), Some(0));
+        assert!(playlist.navigate(5, false, false));
+        assert_eq!(playlist.selected, BTreeSet::from([5]));
+        assert!(playlist.remove_selected());
+        assert_eq!(playlist.items.len(), 5);
+    }
+
+    #[test]
+    fn repeating_navigation_has_bounded_shuffle_history_only() {
+        for shuffle in [false, true] {
+            let mut playlist = Playlist::default();
+            playlist.append((0..3).map(item).collect());
+            playlist.set_repeat(true);
+            playlist.set_shuffle(shuffle);
+            for _ in 0..MAX_PLAYLIST_ITEMS * 3 {
+                assert!(playlist.next().is_some());
+                assert!(playlist.history.len() <= MAX_PLAYLIST_ITEMS);
+            }
+            if shuffle {
+                assert!(playlist.previous().is_some());
+            } else {
+                assert!(playlist.history.is_empty());
+            }
+        }
     }
 
     #[test]

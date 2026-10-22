@@ -31,6 +31,7 @@ struct Check {
 #[derive(Serialize)]
 struct ProbeReport {
     schema: &'static str,
+    status: &'static str,
     timestamp_unix_ms: u128,
     os: &'static str,
     architecture: &'static str,
@@ -59,15 +60,13 @@ fn run_codec_check(args: &[String]) -> Result<()> {
         .ok_or("expected frame count is required")?
         .parse()?;
     let seek_frame = args.get(3).ok_or("seek frame is required")?.parse()?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&codec::qualify(
-            Path::new(path),
-            expected_frames,
-            seek_frame
-        )?)?
-    );
-    Ok(())
+    let report = codec::qualify(Path::new(path), expected_frames, seek_frame)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if report["status"] == "pass" {
+        Ok(())
+    } else {
+        Err("Codec qualification failed".into())
+    }
 }
 
 fn run_ui(seconds: u64) -> Result<()> {
@@ -99,17 +98,27 @@ fn run_self_check(private_container: Option<PathBuf>) -> Result<()> {
     ]
     .into_iter()
     .chain(private_check)
-    .collect();
+    .collect::<Vec<_>>();
     remove_file(synthetic)?;
+    let passed = checks_passed(&checks);
     let report = ProbeReport {
         schema: "stemplayer-phase0-probe-v1",
+        status: if passed { "pass" } else { "fail" },
         timestamp_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
         os: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
         checks,
     };
     println!("{}", serde_json::to_string_pretty(&report)?);
-    Ok(())
+    if passed {
+        Ok(())
+    } else {
+        Err("One or more self-checks failed".into())
+    }
+}
+
+fn checks_passed(checks: &[Check]) -> bool {
+    !checks.is_empty() && checks.iter().all(|check| check.status == "pass")
 }
 
 fn check_sha256() -> Check {
@@ -337,5 +346,18 @@ mod tests {
         assert_eq!(check_sha256().status, "pass");
         assert_eq!(check_ring().status, "pass");
         assert_eq!(check_resampler().status, "pass");
+    }
+
+    #[test]
+    fn self_check_verdict_requires_nonempty_successful_checks() {
+        assert!(!checks_passed(&[]));
+        assert!(checks_passed(&[check_ring(), check_sha256()]));
+        assert!(!checks_passed(&[
+            check_ring(),
+            Check {
+                status: "fail",
+                ..check_sha256()
+            },
+        ]));
     }
 }

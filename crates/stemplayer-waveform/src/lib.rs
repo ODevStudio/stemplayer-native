@@ -2,6 +2,8 @@
 
 mod analyzer;
 mod cache;
+mod cache_io;
+mod cache_root;
 mod fingerprint;
 mod priority;
 mod viewport;

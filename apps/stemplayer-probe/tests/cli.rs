@@ -53,7 +53,7 @@ fn studio_commands_inspect_validate_and_decode_bounded_windows() {
     let value: Value = serde_json::from_slice(&inspect.stdout).unwrap();
     assert_eq!(value["schema"], "stemplayer-studio-bundle-v1");
     assert_eq!(value["frames"], 4);
-    assert_eq!(value["maximum_open_files"], 1);
+    assert_eq!(value["maximum_open_files"], 4);
 
     let manifest = dir.join("manifest.json");
     let validate = probe(&["validate", manifest.to_str().unwrap()]);
@@ -164,6 +164,7 @@ fn container_inspection_rejects_content_instead_of_trusting_the_extension() {
     assert_eq!(output.status.code(), Some(3));
     let value: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(value["code"], "E_CONTAINER_NOT_MP4");
+    assert_eq!(value["recoverability"], "choose-another-source");
     fs::remove_file(path).unwrap();
 }
 

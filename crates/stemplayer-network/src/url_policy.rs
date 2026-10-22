@@ -30,6 +30,7 @@ fn loopback(host: Host<&str>) -> bool {
 
 pub fn child_url(base: &Url, reference: &str) -> Result<Url, PlayerError> {
     if reference.is_empty()
+        || reference != reference.trim_ascii()
         || reference != reference.nfc().collect::<String>()
         || reference.starts_with('/')
         || reference.contains(['\\', '?', '#'])
@@ -151,6 +152,10 @@ mod tests {
         for value in [
             "/root",
             "../x",
+            " /root",
+            " ../x",
+            "a/.. ",
+            "track.m3u8 ",
             "a//b",
             "a\\b",
             "a%2fb",

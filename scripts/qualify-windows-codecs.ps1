@@ -77,7 +77,8 @@ function Invoke-CodecProbe {
 
 Push-Location $root
 try {
-    cargo build --release --locked
+    cargo build --release --locked -p stemplayer-phase0-probe
+    if ($LASTEXITCODE -ne 0) { throw "Probe build failed" }
     $binary = Join-Path $root "target/release/stemplayer-phase0-probe.exe"
     $results = @(
         foreach ($codec in @("aac", "alac")) {

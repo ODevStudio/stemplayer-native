@@ -1,6 +1,6 @@
 # Stemplayer Native
 
-Stemplayer Native is a standalone Rust desktop player for supported Studio WAV bundles, stem MP4/M4A sources, and explicit `stem-hls-v1` sources. It does not build, launch, or bundle the web player, converter, Node.js, Python, FFmpeg, or a browser runtime.
+Stemplayer Native is a standalone Rust desktop player for supported ordinary audio, Studio WAV bundles, stem MP4/M4A sources, and explicit `stem-hls-v1` sources. It does not build, launch, or bundle the web player, converter, Node.js, Python, FFmpeg, or a browser runtime.
 
 ## Availability
 
@@ -14,6 +14,7 @@ Install the pinned Rust toolchain, then run:
 
 ```powershell
 cargo fmt --all -- --check
+cargo test --locked -p stemplayer
 cargo test --locked --workspace --all-features
 cargo build --locked --release -p stemplayer
 cargo run --locked --release -p stemplayer

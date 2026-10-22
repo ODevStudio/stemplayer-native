@@ -10,6 +10,17 @@ function Invoke-PreviewCommand {
     }
 }
 
+function Assert-PreviewSourceUnchanged {
+    param([string]$Commit)
+
+    if (Invoke-PreviewCommand 'git' @('status', '--porcelain', '--untracked-files=normal')) {
+        throw 'Source checkout changed during preview build'
+    }
+    if ((Invoke-PreviewCommand 'git' @('rev-parse', 'HEAD')) -cne $Commit) {
+        throw 'Source revision changed during preview build'
+    }
+}
+
 function Assert-PreviewSystemLibraries {
     param([string[]]$Libraries)
 
@@ -262,9 +273,7 @@ function Invoke-WindowsPreviewPackage {
                 }
             }
         }
-        if (Invoke-PreviewCommand 'git' @('status', '--porcelain', '--untracked-files=normal')) {
-            throw 'Source checkout changed during preview build'
-        }
+        Assert-PreviewSourceUnchanged $commit
         New-PreviewArchive $payload (Join-Path $root "artifacts/windows-preview/$($package.version)")
     }
     finally {

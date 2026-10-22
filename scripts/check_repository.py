@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote
@@ -22,6 +24,20 @@ CREDENTIAL_VALUE = re.compile(
 
 
 def markdown_files(root: Path) -> list[Path]:
+    if (root / ".git").exists():
+        inventory = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.md"],
+            cwd=root,
+            check=True,
+            stdout=subprocess.PIPE,
+        )
+        return sorted(
+            {
+                root / os.fsdecode(name)
+                for name in inventory.stdout.split(b"\0")
+                if name and (root / os.fsdecode(name)).is_file()
+            }
+        )
     return sorted(
         path
         for path in root.rglob("*.md")

@@ -3,6 +3,9 @@
 
 use slint::ComponentHandle;
 
+mod recent_sources;
+mod settings;
+
 #[cfg(all(feature = "local-wav", not(feature = "development")))]
 mod playlist;
 #[cfg(all(feature = "local-wav", any(test, not(feature = "development"))))]
@@ -15,7 +18,7 @@ slint::include_modules!();
 #[cfg(test)]
 mod playlist_scroll_tests;
 
-fn main() -> Result<(), slint::PlatformError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mode = args.first();
     let duration = args
@@ -48,6 +51,16 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(|loaded| loaded.settings().clone())
         .unwrap_or_default();
     let app = AppWindow::new()?;
+    let weak = app.as_weak();
+    let settings_writer = settings::SettingsWriter::start(settings_path, settings, move || {
+        let _ = weak.upgrade_in_event_loop(|app| {
+            app.set_skip_notice("Settings could not be saved".into());
+        });
+    })
+    .map_err(|_| std::io::Error::other("Settings persistence is unavailable"))?;
+    let settings_store = settings_writer.store();
+    let _ = settings_store.update(recent_sources::sanitize);
+    let settings = settings_store.snapshot();
     app.set_diagnostics_visible(settings.diagnostics_visible);
     app.set_theme_preference(i32::from(settings.theme));
     app.set_waveform_cache_enabled(settings.waveform_cache_enabled);
@@ -78,8 +91,8 @@ fn main() -> Result<(), slint::PlatformError> {
     let controller = studio_ui::wire(
         &app,
         mode.is_some_and(|value| matches!(value.as_str(), "--play-source" | "--play-url")),
-        settings_path.clone(),
-        &settings,
+        settings_store.clone(),
+        restore_playlist_at_startup(mode.map(String::as_str)),
     );
     if mode.is_some_and(|value| value == "--ui-smoke") {
         app.set_playlist_items(slint::ModelRc::new(slint::VecModel::from(vec![
@@ -107,7 +120,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let _ = controller.submit(PlayerCommand::Play);
         }
     }
-    #[cfg(all(feature = "hls", not(feature = "development")))]
+    #[cfg(all(feature = "local-wav", feature = "hls", not(feature = "development")))]
     if mode.is_some_and(|value| value == "--play-url")
         && let Some(url) = args.get(1)
     {
@@ -172,8 +185,25 @@ fn main() -> Result<(), slint::PlatformError> {
         );
     }
     app.run()?;
-    if let Some(path) = settings_path.as_deref() {
-        let current = stemplayer_platform::load_settings(path).settings().clone();
+    #[cfg(feature = "development")]
+    {
+        use stemplayer_domain::{PlayerCommand, PlayerController};
+        let _ = controller.submit(PlayerCommand::Shutdown);
+    }
+    #[cfg(all(feature = "local-wav", not(feature = "development")))]
+    if mode.is_some_and(|value| matches!(value.as_str(), "--play-source" | "--play-url")) {
+        use stemplayer_domain::PlayerController;
+        if let Ok(line) = serde_json::to_string(&controller.latest_snapshot()) {
+            if let Some(path) = args.get(3) {
+                let _ = std::fs::write(path, line);
+            } else {
+                println!("{line}");
+            }
+        }
+    }
+    #[cfg(all(feature = "local-wav", not(feature = "development")))]
+    controller.shutdown_and_join();
+    let persistence_result = settings_writer.finish(|current| {
         let size = app.window().size().to_logical(app.window().scale_factor());
         let position = app.window().position();
         let maximized = app.window().is_maximized();
@@ -187,7 +217,7 @@ fn main() -> Result<(), slint::PlatformError> {
             .get_playlist_expanded_window_height()
             .round()
             .clamp(256.0, 2_160.0) as u32;
-        let settings = stemplayer_platform::LocalSettings {
+        stemplayer_platform::LocalSettings {
             diagnostics_visible: app.get_diagnostics_visible(),
             theme: u8::try_from(app.get_theme_preference()).unwrap_or_default(),
             recent_sources_enabled: app.get_recent_sources_enabled(),
@@ -219,29 +249,25 @@ fn main() -> Result<(), slint::PlatformError> {
             window_maximized: maximized,
             waveform_cache_enabled: app.get_waveform_cache_enabled(),
             waveform_cache_limit_mb: cache_limit_mb(app.get_waveform_cache_limit_index()),
-            ..current
-        };
-        let _ = stemplayer_platform::save_settings(path, &settings);
-    }
-    #[cfg(feature = "development")]
-    {
-        use stemplayer_domain::{PlayerCommand, PlayerController};
-        let _ = controller.submit(PlayerCommand::Shutdown);
-    }
-    #[cfg(all(feature = "local-wav", not(feature = "development")))]
-    if mode.is_some_and(|value| matches!(value.as_str(), "--play-source" | "--play-url")) {
-        use stemplayer_domain::PlayerController;
-        if let Ok(line) = serde_json::to_string(&controller.latest_snapshot()) {
-            if let Some(path) = args.get(3) {
-                let _ = std::fs::write(path, line);
-            } else {
-                println!("{line}");
-            }
+            ..current.clone()
         }
-    }
-    #[cfg(all(feature = "local-wav", not(feature = "development")))]
-    controller.shutdown_and_join();
+    });
+    persistence_result.map_err(|_| std::io::Error::other("Settings could not be saved"))?;
     Ok(())
+}
+
+#[cfg(all(feature = "local-wav", not(feature = "development")))]
+fn restore_playlist_at_startup(mode: Option<&str>) -> bool {
+    !matches!(mode, Some("--play-source" | "--play-url"))
+}
+
+#[cfg(all(test, feature = "local-wav", not(feature = "development")))]
+#[test]
+fn explicit_startup_sources_suppress_delayed_playlist_restoration() {
+    assert!(restore_playlist_at_startup(None));
+    assert!(restore_playlist_at_startup(Some("--ui-smoke")));
+    assert!(!restore_playlist_at_startup(Some("--play-source")));
+    assert!(!restore_playlist_at_startup(Some("--play-url")));
 }
 
 #[cfg(feature = "development")]

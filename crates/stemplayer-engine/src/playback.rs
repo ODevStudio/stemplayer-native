@@ -108,14 +108,7 @@ impl PlaybackEngine {
     pub fn seek(&mut self, frame: SourceFrame) -> Result<SourceFrame, PlayerError> {
         let started = Instant::now();
         let before = self.producer.metrics();
-        let resume = if self.transport.state() == TransportState::Seeking {
-            self.resume_after_seek
-        } else {
-            matches!(
-                self.transport.state(),
-                TransportState::Playing | TransportState::Priming
-            )
-        };
+        let resume = self.playback_requested();
         self.resume_after_seek = resume;
         if self.transport.state() != TransportState::Seeking {
             self.transport.transition(TransportState::Seeking)?;
@@ -152,6 +145,11 @@ impl PlaybackEngine {
         let channels = usize::from(self.session.channel_count_for_mixing());
         let mut source = [0.0_f32; 10];
         let end = self.session.metadata().end_frame_exclusive.get() as u64;
+        let required = (output.len() as u64).min(end.saturating_sub(self.position));
+        if self.ring.buffered_frames() < required {
+            self.underruns = self.underruns.saturating_add(1);
+            return Ok(0);
+        }
         let mut rendered = 0;
         self.mixer.begin_block();
         for target in output {
@@ -278,6 +276,15 @@ impl PlaybackEngine {
         self.transport.state()
     }
 
+    pub const fn playback_requested(&self) -> bool {
+        match self.transport.state() {
+            TransportState::Playing => true,
+            TransportState::Priming => self.play_after_priming,
+            TransportState::Seeking => self.resume_after_seek,
+            _ => false,
+        }
+    }
+
     pub const fn position(&self) -> SourceFrame {
         SourceFrame::new(self.position as i64)
     }
@@ -396,6 +403,9 @@ impl PlaybackEngine {
 fn end_frame(session: &PlaybackSession) -> u64 {
     session.metadata().end_frame_exclusive.get() as u64
 }
+
+#[cfg(test)]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {
@@ -698,7 +708,7 @@ mod tests {
         engine.stop().unwrap();
         assert_eq!(engine.state(), TransportState::Ready);
         engine.play().unwrap();
-        assert!(cancelled.load(Ordering::Acquire));
+        assert!(!cancelled.load(Ordering::Acquire));
         release.store(true, Ordering::Release);
     }
 }

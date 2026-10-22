@@ -5,7 +5,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::sync_channel;
 use stemplayer_domain::ErrorCode;
-use stemplayer_format::{HashStatus, SampleEncoding, SelectedFile, SourceGroup, StudioBundle};
+use stemplayer_format::{
+    HashStatus, MAX_MANIFEST_BYTES, SampleEncoding, SelectedFile, SourceGroup, StudioBundle,
+    StudioRole,
+};
 
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -43,10 +46,78 @@ fn qualified_encodings_rates_and_optional_master_inspect() {
         assert_eq!(inspected.report().sample_rate, rate);
         assert_eq!(inspected.report().frames, 4);
         assert_eq!(inspected.report().has_master, master);
-        assert_eq!(inspected.report().maximum_open_files, 1);
+        assert_eq!(
+            inspected.report().maximum_open_files,
+            if master { 5 } else { 4 }
+        );
         assert_eq!(inspected.report().peak_pending_blocks, 1);
         assert_eq!(inspected.report().warnings.len(), 1);
     }
+}
+
+#[test]
+fn permitted_manifest_sizes_are_read_in_bounded_ranges() {
+    let dir = bundle(SampleEncoding::Pcm16, 48_000, false, false);
+    let path = dir.0.join("manifest.json");
+    let manifest = fs::read(&path).unwrap();
+    for length in [65_536, 65_537, MAX_MANIFEST_BYTES] {
+        let padded = manifest
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(b' '))
+            .take(length)
+            .collect::<Vec<_>>();
+        fs::write(&path, padded).unwrap();
+        let inspected =
+            StudioBundle::inspect(selected(&dir.0), false, &AtomicBool::new(false)).unwrap();
+        assert_eq!(inspected.report().frames, 4);
+        assert_eq!(
+            inspected.report().bytes_read,
+            length as u64
+                + inspected
+                    .report()
+                    .tracks
+                    .iter()
+                    .map(|track| track.bytes_read)
+                    .sum::<u64>()
+        );
+    }
+    fs::write(&path, vec![b' '; MAX_MANIFEST_BYTES + 1]).unwrap();
+    assert_eq!(
+        StudioBundle::inspect(selected(&dir.0), false, &AtomicBool::new(false))
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::ManifestTooLarge
+    );
+}
+
+#[test]
+fn same_metadata_replacements_cannot_reopen_validated_tracks() {
+    let dir = bundle(SampleEncoding::Pcm16, 48_000, false, false);
+    let inspected =
+        StudioBundle::inspect(selected(&dir.0), false, &AtomicBool::new(false)).unwrap();
+    let path = dir.0.join("drums.wav");
+    let metadata = fs::metadata(&path).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    fs::rename(&path, dir.0.join("original.wav")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(metadata.modified().unwrap())
+        .unwrap();
+    let replacement = fs::metadata(&path).unwrap();
+    assert_eq!(replacement.len(), metadata.len());
+    assert_eq!(
+        replacement.modified().unwrap(),
+        metadata.modified().unwrap()
+    );
+    assert_eq!(
+        inspected.open_track(StudioRole::Drums).err().unwrap().code,
+        ErrorCode::BundleInconsistent
+    );
 }
 
 #[test]
@@ -61,6 +132,7 @@ fn hashes_stream_and_fail_closed() {
     )
     .unwrap();
     let progress = receiver.try_recv().unwrap();
+    assert_eq!(validated.report().maximum_open_files, 5);
     assert_eq!(progress.file_index, 0);
     assert_eq!(progress.bytes_hashed, progress.total_bytes);
     assert!(

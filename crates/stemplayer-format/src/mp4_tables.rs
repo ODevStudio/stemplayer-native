@@ -1,4 +1,4 @@
-use crate::BoundedReader;
+use crate::mp4_reader::Mp4Reader;
 use serde::Serialize;
 use std::sync::atomic::AtomicBool;
 use stemplayer_domain::{ErrorCode, PlayerError};
@@ -6,6 +6,7 @@ use stemplayer_domain::{ErrorCode, PlayerError};
 const MAX_SAMPLES: u32 = 1_000_000;
 const MAX_CHUNKS: u32 = 250_000;
 const MAX_RUNS: u32 = 250_000;
+pub const MAX_MP4_PACKET_BYTES: u32 = 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "values", rename_all = "snake_case")]
@@ -210,7 +211,7 @@ fn build_chunks(
     if mappings[0].first_chunk != 1
         || mappings
             .iter()
-            .any(|entry| entry.samples_per_chunk == 0 || entry.sample_description_index == 0)
+            .any(|entry| entry.samples_per_chunk == 0 || entry.sample_description_index != 1)
         || mappings
             .windows(2)
             .any(|pair| pair[0].first_chunk >= pair[1].first_chunk)
@@ -264,7 +265,7 @@ fn build_chunks(
 }
 
 pub(crate) fn read_sample_sizes(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -283,6 +284,7 @@ pub(crate) fn read_sample_sizes(
     let count = u32::from_be_bytes(header[8..12].try_into().unwrap());
     validate_count(count, MAX_SAMPLES, "sample")?;
     if fixed_size != 0 {
+        validate_sample_size(fixed_size)?;
         if body.checked_add(12) != Some(end) {
             return Err(malformed("MP4 fixed sample-size table is invalid"));
         }
@@ -300,14 +302,14 @@ pub(crate) fn read_sample_sizes(
     }
     let mut sizes = vec![0_u32; count as usize];
     read_u32_entries(reader, cancelled, body + 12, &mut sizes)?;
-    if sizes.contains(&0) {
-        return Err(malformed("MP4 sample size must be positive"));
-    }
+    sizes
+        .iter()
+        .try_for_each(|size| validate_sample_size(*size))?;
     Ok(Mp4SampleSizes::Variable(sizes))
 }
 
 pub(crate) fn read_chunk_offsets(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -352,7 +354,7 @@ pub(crate) fn read_chunk_offsets(
 }
 
 pub(crate) fn read_sample_to_chunk(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -380,17 +382,21 @@ pub(crate) fn read_sample_to_chunk(
             end,
             "MP4 sample-to-chunk entry is truncated",
         )?;
+        let sample_description_index = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        if sample_description_index != 1 {
+            return Err(malformed("MP4 sample description index must be one"));
+        }
         entries.push(SampleToChunk {
             first_chunk: u32::from_be_bytes(bytes[..4].try_into().unwrap()),
             samples_per_chunk: u32::from_be_bytes(bytes[4..8].try_into().unwrap()),
-            sample_description_index: u32::from_be_bytes(bytes[8..12].try_into().unwrap()),
+            sample_description_index,
         });
     }
     Ok(entries)
 }
 
 pub(crate) fn read_timing(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -427,7 +433,7 @@ pub(crate) fn read_timing(
 }
 
 fn read_u32_entries(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     mut offset: u64,
     output: &mut [u32],
@@ -440,6 +446,16 @@ fn read_u32_entries(
             *value = u32::from_be_bytes(encoded.try_into().unwrap());
         }
         offset += bytes as u64;
+    }
+    Ok(())
+}
+
+fn validate_sample_size(size: u32) -> Result<(), PlayerError> {
+    if !(1..=MAX_MP4_PACKET_BYTES).contains(&size) {
+        return Err(PlayerError::new(
+            ErrorCode::EncodedSampleInvalid,
+            "MP4 sample size is outside the supported packet limit",
+        ));
     }
     Ok(())
 }
@@ -471,7 +487,7 @@ fn validate_table_range(
 }
 
 fn read_array<const N: usize>(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     offset: u64,
     end: u64,
@@ -502,6 +518,66 @@ fn malformed(summary: &str) -> PlayerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packet_size_limits_cover_fixed_and_variable_tables() {
+        for size in [1, MAX_MP4_PACKET_BYTES, MAX_MP4_PACKET_BYTES + 1, u32::MAX] {
+            for fixed in [true, false] {
+                let bytes = [
+                    0_u32.to_be_bytes(),
+                    (if fixed { size } else { 0 }).to_be_bytes(),
+                    1_u32.to_be_bytes(),
+                ]
+                .concat();
+                let bytes = if fixed {
+                    bytes
+                } else {
+                    [bytes, size.to_be_bytes().to_vec()].concat()
+                };
+                let result = read_sample_sizes(
+                    &mut Mp4Reader::Bytes {
+                        bytes: &bytes,
+                        bytes_read: 0,
+                    },
+                    &AtomicBool::new(false),
+                    0,
+                    bytes.len() as u64,
+                );
+                if size <= MAX_MP4_PACKET_BYTES {
+                    assert!(result.is_ok());
+                } else {
+                    assert_eq!(result.unwrap_err().code, ErrorCode::EncodedSampleInvalid);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_chunk_mapping_must_reference_the_single_sample_description() {
+        for descriptions in [[1_u32, 1], [0, 1], [2, 1], [1, 2]] {
+            let bytes = [
+                0_u32.to_be_bytes(),
+                2_u32.to_be_bytes(),
+                1_u32.to_be_bytes(),
+                1_u32.to_be_bytes(),
+                descriptions[0].to_be_bytes(),
+                2_u32.to_be_bytes(),
+                1_u32.to_be_bytes(),
+                descriptions[1].to_be_bytes(),
+            ]
+            .concat();
+            let result = read_sample_to_chunk(
+                &mut Mp4Reader::Bytes {
+                    bytes: &bytes,
+                    bytes_read: 0,
+                },
+                &AtomicBool::new(false),
+                0,
+                bytes.len() as u64,
+            );
+            assert_eq!(result.is_ok(), descriptions == [1, 1]);
+        }
+    }
 
     #[test]
     fn packet_ranges_timing_and_table_disagreements_are_deterministic() {

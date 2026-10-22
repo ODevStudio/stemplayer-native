@@ -41,17 +41,7 @@ fn cancelled_decode_is_not_published_as_an_error() {
 #[test]
 fn queued_play_preserves_a_failed_open_until_another_source_is_loaded() {
     let fixture = Fixture::new();
-    let shared = Shared {
-        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
-        waveform: RwLock::new(None),
-        current_source: RwLock::new(None),
-        subscribers: Mutex::new(Vec::new()),
-        command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(false)),
-        epoch: AtomicU64::new(0),
-        play_requested: AtomicBool::new(false),
-        shutdown: AtomicBool::new(false),
-    };
+    let shared = shared_state();
     let mut state = WorkerState::new(None, false);
     let error = state
         .open(fixture.path.join("missing.wav").to_str().unwrap(), &shared)
@@ -66,6 +56,7 @@ fn queued_play_preserves_a_failed_open_until_another_source_is_loaded() {
     assert_eq!(snapshot.details().error.as_ref().unwrap().code, code);
     drop(snapshot);
 
+    state.source_cancelled = Arc::new(AtomicBool::new(false));
     state.open(fixture.path.to_str().unwrap(), &shared).unwrap();
     let snapshot = shared.snapshot.read().unwrap();
     assert_eq!(snapshot.transport_state(), TransportState::Ready);
@@ -75,17 +66,7 @@ fn queued_play_preserves_a_failed_open_until_another_source_is_loaded() {
 #[test]
 fn waveform_decode_failure_keeps_the_valid_audio_session_playable() {
     let fixture = Fixture::new();
-    let shared = Shared {
-        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
-        waveform: RwLock::new(None),
-        current_source: RwLock::new(None),
-        subscribers: Mutex::new(Vec::new()),
-        command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(false)),
-        epoch: AtomicU64::new(0),
-        play_requested: AtomicBool::new(false),
-        shutdown: AtomicBool::new(false),
-    };
+    let shared = shared_state();
     let mut state = WorkerState::new(None, false);
     state.open(fixture.path.to_str().unwrap(), &shared).unwrap();
     let engine = state.engine.as_ref().unwrap();
@@ -101,6 +82,7 @@ fn waveform_decode_failure_keeps_the_valid_audio_session_playable() {
             state.fingerprint.unwrap(),
             &metadata,
             1,
+            Arc::clone(&state.source_cancelled),
         )
         .unwrap(),
     );
@@ -131,17 +113,7 @@ fn waveform_decode_failure_keeps_the_valid_audio_session_playable() {
 #[test]
 fn playback_source_failure_stops_work_and_preserves_the_error_for_recovery() {
     let fixture = Fixture::new();
-    let shared = Shared {
-        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
-        waveform: RwLock::new(None),
-        current_source: RwLock::new(None),
-        subscribers: Mutex::new(Vec::new()),
-        command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(false)),
-        epoch: AtomicU64::new(0),
-        play_requested: AtomicBool::new(false),
-        shutdown: AtomicBool::new(false),
-    };
+    let shared = shared_state();
     let mut state = WorkerState::new(None, false);
     state.open(fixture.path.to_str().unwrap(), &shared).unwrap();
 
@@ -179,23 +151,14 @@ fn waveform_cache_write_failure_is_only_a_warning_and_resets_on_open() {
     let cache = Arc::new(
         WaveformCache::new(
             cache_path.clone(),
-            stemplayer_waveform::CacheConfig::default(),
+            stemplayer_waveform::CacheConfig {
+                capacity_bytes: 1,
+                ..stemplayer_waveform::CacheConfig::default()
+            },
         )
         .unwrap(),
     );
-    std::fs::remove_dir(&cache_path).unwrap();
-    std::fs::write(&cache_path, [0]).unwrap();
-    let shared = Shared {
-        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
-        waveform: RwLock::new(None),
-        current_source: RwLock::new(None),
-        subscribers: Mutex::new(Vec::new()),
-        command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(false)),
-        epoch: AtomicU64::new(0),
-        play_requested: AtomicBool::new(false),
-        shutdown: AtomicBool::new(false),
-    };
+    let shared = shared_state();
     let mut state = WorkerState::new(Some(cache), true);
     state.open(fixture.path.to_str().unwrap(), &shared).unwrap();
     state.analyze(&shared).unwrap();
@@ -257,24 +220,19 @@ fn preloader_rejects_a_source_changed_after_preparation() {
 
 #[test]
 fn preloader_rejects_a_request_from_an_old_track() {
-    let shared = Shared {
-        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
-        waveform: RwLock::new(None),
-        current_source: RwLock::new(None),
-        subscribers: Mutex::new(Vec::new()),
-        command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(false)),
-        epoch: AtomicU64::new(0),
-        play_requested: AtomicBool::new(false),
-        shutdown: AtomicBool::new(false),
-    };
+    let shared = shared_state();
     let mut state = WorkerState::new(None, false);
 
     state
         .handle(
-            WorkerCommand::PrepareSource {
-                source: PathBuf::from("stale.wav"),
-                generation: GenerationId::INITIAL.next().unwrap(),
+            QueuedCommand {
+                command: WorkerCommand::PrepareSource {
+                    source: PathBuf::from("stale.wav"),
+                    generation: GenerationId::INITIAL.next().unwrap(),
+                },
+                epoch: 0,
+                transport_revision: 0,
+                cancelled: Arc::new(AtomicBool::new(false)),
             },
             &shared,
         )
@@ -310,9 +268,11 @@ fn failed_invalidating_admission_does_not_cancel_or_advance_epoch() {
         waveform: RwLock::new(None),
         current_source: RwLock::new(None),
         subscribers: Mutex::new(Vec::new()),
+        source_subscribers: Mutex::new(Vec::new()),
         command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
         epoch: AtomicU64::new(0),
+        transport_revision: AtomicU64::new(0),
         play_requested: AtomicBool::new(true),
         shutdown: AtomicBool::new(false),
     });
@@ -336,7 +296,7 @@ fn failed_invalidating_admission_does_not_cancel_or_advance_epoch() {
     assert_eq!(error.code, ErrorCode::CommandQueueFull);
     assert_eq!(shared.epoch.load(Ordering::Acquire), 0);
     assert!(controller.play_requested());
-    assert!(!shared.cancel.load(Ordering::Acquire));
+    assert!(!shared.cancel.lock().unwrap().load(Ordering::Acquire));
     drop(receiver);
 }
 
@@ -348,9 +308,11 @@ fn stale_prefetch_command_preserves_newer_cancellation() {
         waveform: RwLock::new(None),
         current_source: RwLock::new(None),
         subscribers: Mutex::new(Vec::new()),
+        source_subscribers: Mutex::new(Vec::new()),
         command_admission: Mutex::new(()),
-        cancel: Arc::new(AtomicBool::new(true)),
+        cancel: Mutex::new(Arc::new(AtomicBool::new(true))),
         epoch: AtomicU64::new(1),
+        transport_revision: AtomicU64::new(0),
         play_requested: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
     });
@@ -361,13 +323,15 @@ fn stale_prefetch_command_preserves_newer_cancellation() {
                 generation: GenerationId::INITIAL,
             },
             epoch: 0,
+            transport_revision: 0,
+            cancelled: Arc::clone(&shared.cancel.lock().unwrap()),
         })
         .unwrap();
     drop(sender);
 
     worker_loop(receiver, Arc::clone(&shared), None, false);
 
-    assert!(shared.cancel.load(Ordering::Acquire));
+    assert!(shared.cancel.lock().unwrap().load(Ordering::Acquire));
 }
 
 #[test]
@@ -808,4 +772,20 @@ fn wave(samples: &[i16]) -> Vec<u8> {
         bytes.extend(sample.to_le_bytes());
     }
     bytes
+}
+
+fn shared_state() -> Shared {
+    Shared {
+        snapshot: RwLock::new(PlayerSnapshot::empty(TransportState::Empty)),
+        waveform: RwLock::new(None),
+        current_source: RwLock::new(None),
+        subscribers: Mutex::new(Vec::new()),
+        source_subscribers: Mutex::new(Vec::new()),
+        command_admission: Mutex::new(()),
+        cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
+        epoch: AtomicU64::new(0),
+        transport_revision: AtomicU64::new(0),
+        play_requested: AtomicBool::new(false),
+        shutdown: AtomicBool::new(false),
+    }
 }

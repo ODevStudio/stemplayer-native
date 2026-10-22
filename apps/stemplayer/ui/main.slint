@@ -1,6 +1,6 @@
 import { Button, CheckBox, ComboBox, HorizontalBox, LineEdit, Palette, ScrollView, TextEdit, VerticalBox } from "std-widgets.slint";
 
-import { GainFader, StemDeckRow, VerticalGainFader, WaveformRow } from "deck.slint";
+import { StemDeckRow, VerticalGainFader, WaveformRow } from "deck.slint";
 import { IconButton, PlaylistPanel, PlaylistRow } from "chrome.slint";
 export component AppWindow inherits Window {
     title: "Stemplayer Native";
@@ -84,6 +84,7 @@ export component AppWindow inherits Window {
     in-out property <bool> repeat-enabled: false;
     in property <string> diagnostics-text: "";
     in property <string> diagnostics-export-status: "";
+    in-out property <bool> diagnostics-exporting: false;
     in-out property <bool> window-minimized <=> root.minimized;
 
     callback open-source();
@@ -117,6 +118,7 @@ export component AppWindow inherits Window {
     callback set-output-preference(int);
     callback select-output-device(int);
     callback select-playlist-item(int, bool, bool);
+    callback navigate-playlist-item(int, bool, bool);
     callback context-select-playlist-item(int);
     callback reorder-playlist-item(int, int);
     callback select-all-playlist-items();
@@ -161,7 +163,7 @@ export component AppWindow inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Space) {
                 if (root.can-pause) { root.pause(); }
-                else if (root.can-play) { root.play(); }
+                else if (root.can-play || root.playlist-items.length > 0) { root.play(); }
                 accept
             } else {
                 reject
@@ -173,7 +175,7 @@ export component AppWindow inherits Window {
             keys: @keys(P);
             activated => {
                 if (root.can-pause) { root.pause(); }
-                else if (root.can-play) { root.play(); }
+                else if (root.can-play || root.playlist-items.length > 0) { root.play(); }
             }
         }
         KeyBinding { keys: @keys(R); enabled: root.can-mix; activated => { root.reset-mix(); } }
@@ -524,29 +526,6 @@ export component AppWindow inherits Window {
                 }
             }
         }
-        if root.has-master && root.output-mode == "Master reference": HorizontalBox {
-            spacing: 8px;
-            Text {
-                text: "Overall";
-                width: 48px;
-                vertical-alignment: center;
-            }
-            GainFader {
-                gain-position <=> root.drums-gain-position;
-                gain-text: root.drums-gain-text;
-                role-name: "Overall";
-                enabled: root.can-mix;
-                gain-changed(value) => {
-                    root.drums-gain-position = value;
-                    root.bass-gain-position = value;
-                    root.other-gain-position = value;
-                    root.vocals-gain-position = value;
-                    root.set-gain(-1, value);
-                }
-                gain-commit => { root.commit-commands(); }
-            }
-        }
-
         if root.diagnostics-visible: Rectangle {
             height: 54px;
             background: Palette.alternate-background;
@@ -579,6 +558,7 @@ export component AppWindow inherits Window {
                 }
                 Button {
                     text: "Export JSON";
+                    enabled: !root.diagnostics-exporting;
                     clicked => { root.export-diagnostics(); }
                 }
             }
@@ -588,6 +568,7 @@ export component AppWindow inherits Window {
             selected-index <=> root.playlist-index;
             expanded <=> root.playlist-expanded;
             selected(index, control, shift) => { root.select-playlist-item(index, control, shift); }
+            navigated(index, control, shift) => { root.navigate-playlist-item(index, control, shift); }
             context-selected(index) => { root.context-select-playlist-item(index); }
             reordered(from, to) => { root.reorder-playlist-item(from, to); }
             activated(index) => { root.activate-playlist-item(index); }

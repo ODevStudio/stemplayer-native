@@ -218,19 +218,30 @@ fn read_settings(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 fn parse_settings(bytes: &[u8]) -> Option<SettingsLoad> {
-    match serde_json::from_slice::<LocalSettings>(bytes) {
-        Ok(settings)
-            if settings.schema_version == SETTINGS_SCHEMA_VERSION && valid_settings(&settings) =>
-        {
-            Some(SettingsLoad::Loaded(settings))
-        }
-        Ok(settings) if matches!(settings.schema_version, 1..=3) && valid_settings(&settings) => {
-            Some(SettingsLoad::Migrated(LocalSettings {
-                schema_version: SETTINGS_SCHEMA_VERSION,
-                ..settings
-            }))
-        }
-        Ok(_) | Err(_) => None,
+    let settings = serde_json::from_slice::<LocalSettings>(bytes).ok()?;
+    if !valid_settings(&settings) {
+        return None;
+    }
+    let legacy_device = settings.selected_device.as_deref().is_some_and(|device| {
+        let Some(index) = device.strip_prefix("device-") else {
+            return false;
+        };
+        index
+            .parse::<usize>()
+            .is_ok_and(|number| number > 0 && number.to_string() == index)
+    });
+    match settings.schema_version {
+        SETTINGS_SCHEMA_VERSION if !legacy_device => Some(SettingsLoad::Loaded(settings)),
+        1..=SETTINGS_SCHEMA_VERSION => Some(SettingsLoad::Migrated(LocalSettings {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            selected_device: if legacy_device {
+                None
+            } else {
+                settings.selected_device.clone()
+            },
+            ..settings
+        })),
+        _ => None,
     }
 }
 
@@ -264,15 +275,16 @@ pub fn load_settings(path: &Path) -> SettingsLoad {
     }
 }
 
-pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<()> {
+pub fn validate_settings(settings: &LocalSettings) -> std::io::Result<()> {
+    settings_bytes(settings).map(|_| ())
+}
+
+fn settings_bytes(settings: &LocalSettings) -> std::io::Result<Vec<u8>> {
     if settings.schema_version != SETTINGS_SCHEMA_VERSION || !valid_settings(settings) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "application settings are invalid",
         ));
-    }
-    if let Some(parent) = path.parent().filter(|value| !value.as_os_str().is_empty()) {
-        fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec(settings).map_err(std::io::Error::other)?;
     if bytes.len() as u64 > MAX_SETTINGS_BYTES {
@@ -280,6 +292,14 @@ pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<(
             std::io::ErrorKind::InvalidInput,
             "serialized application settings exceed the bounded size",
         ));
+    }
+    Ok(bytes)
+}
+
+pub fn save_settings(path: &Path, settings: &LocalSettings) -> std::io::Result<()> {
+    let bytes = settings_bytes(settings)?;
+    if let Some(parent) = path.parent().filter(|value| !value.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
     }
     let file_name = path
         .file_name()
@@ -353,7 +373,7 @@ fn valid_window_size(width: Option<u32>, height: Option<u32>) -> bool {
     match (width, height) {
         (None, None) => true,
         (Some(width), Some(height)) => {
-            (560..=3_840).contains(&width) && (400..=2_160).contains(&height)
+            (560..=3_840).contains(&width) && (256..=2_160).contains(&height)
         }
         _ => false,
     }
@@ -654,7 +674,7 @@ mod tests {
         let path = root.join("nested/settings.json");
         let settings = LocalSettings {
             diagnostics_visible: true,
-            selected_device: Some("device-1".to_owned()),
+            selected_device: Some("endpoint-v1-00000000000000000000000000000001".to_owned()),
             window_maximized: true,
             ..LocalSettings::default()
         };
@@ -735,6 +755,51 @@ mod tests {
     }
 
     #[test]
+    fn legacy_output_indices_migrate_to_system_default_without_losing_other_settings() {
+        for schema_version in [1, 3, SETTINGS_SCHEMA_VERSION] {
+            for device in ["device-1", "device-42"] {
+                let settings = LocalSettings {
+                    schema_version,
+                    selected_device: Some(device.to_owned()),
+                    diagnostics_visible: true,
+                    playlist_sources: vec!["synthetic.mp3".to_owned()],
+                    ..LocalSettings::default()
+                };
+                let loaded = parse_settings(&serde_json::to_vec(&settings).unwrap()).unwrap();
+                assert!(matches!(loaded, SettingsLoad::Migrated(_)));
+                assert_eq!(
+                    loaded.settings(),
+                    &LocalSettings {
+                        schema_version: SETTINGS_SCHEMA_VERSION,
+                        selected_device: None,
+                        ..settings
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_stable_outputs_and_unrecognized_ids_never_migrate_to_system_default() {
+        for selected_device in [
+            None,
+            Some("endpoint-v1-00000000000000000000000000000001"),
+            Some("device-0"),
+            Some("device-01"),
+            Some("device-+1"),
+            Some("device-invalid"),
+        ] {
+            let settings = LocalSettings {
+                selected_device: selected_device.map(str::to_owned),
+                ..LocalSettings::default()
+            };
+            let loaded = parse_settings(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            assert!(matches!(loaded, SettingsLoad::Loaded(_)));
+            assert_eq!(loaded.settings(), &settings);
+        }
+    }
+
+    #[test]
     fn settings_reject_unsafe_window_and_cache_values() {
         for settings in [
             LocalSettings {
@@ -758,6 +823,23 @@ mod tests {
         ] {
             assert!(!valid_settings(&settings));
         }
+    }
+
+    #[test]
+    fn settings_preserve_preferences_at_compact_window_heights() {
+        let path = test_path("compact-window");
+        for height in [256, 288, 350, 400] {
+            let settings = LocalSettings {
+                theme: 2,
+                diagnostics_visible: true,
+                window_width: Some(780),
+                window_height: Some(height),
+                ..LocalSettings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            assert_eq!(load_settings(&path).settings(), &settings);
+        }
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

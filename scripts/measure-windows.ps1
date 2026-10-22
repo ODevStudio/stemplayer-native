@@ -1,20 +1,26 @@
 param(
     [string]$OutputDirectory = "artifacts/phase0/windows",
     [string]$PrivateContainer = "",
+    [ValidateRange(2, 3600)]
     [int]$UiSeconds = 20
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'qualification-helpers.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $output = Join-Path $root $OutputDirectory
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 Push-Location $root
 try {
-    cargo build --release --locked
+    cargo build --release --locked -p stemplayer-phase0-probe
+    if ($LASTEXITCODE -ne 0) { throw "Probe build failed" }
     $binary = Join-Path $root "target/release/stemplayer-phase0-probe.exe"
     $probeArguments = @("--self-check")
     if ($PrivateContainer) { $probeArguments += $PrivateContainer }
     & $binary @probeArguments | Set-Content -Encoding utf8 (Join-Path $output "self-check.json")
+    $selfCheckExit = $LASTEXITCODE
+    $selfCheck = Get-Content -Raw -LiteralPath (Join-Path $output "self-check.json") | ConvertFrom-Json
+    $selfCheckPassed = Test-SelfCheckReport $selfCheck $selfCheckExit
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new($binary)
     $startInfo.Arguments = "--ui-smoke $UiSeconds"
@@ -47,7 +53,7 @@ try {
     $os = Get-CimInstance Win32_OperatingSystem
     $report = [ordered]@{
         schema = "stemplayer-native-measurement-v1"
-        status = if ($process.ExitCode -eq 0) { "passed" } else { "failed" }
+        status = if ($selfCheckPassed -and $process.ExitCode -eq 0 -and @($samples).Count -gt 0) { "passed" } else { "failed" }
         timestamp_utc = [DateTime]::UtcNow.ToString("o")
         build = [ordered]@{
             rustc = (rustc --version)
@@ -72,6 +78,7 @@ try {
         limitations = @("GPU process memory not measured", "Wakeups and timer activity not measured", "Minimized state not automated", "Screen-reader exposure requires manual Accessibility Insights and NVDA evidence")
     }
     $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $output "ui-idle.json")
+    if ($report.status -ne "passed") { exit 1 }
 } finally {
     Pop-Location
 }

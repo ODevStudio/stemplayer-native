@@ -1,23 +1,20 @@
 param(
     [string]$OutputDirectory = "artifacts/phase10/windows",
+    [ValidateRange(1024, 65534)]
     [int]$Port = 18710,
     [string]$PrivateUrl = $env:STEMPLAYER_PRIVATE_HLS_URL
 )
 
 $ErrorActionPreference = 'Stop'
-$root = [IO.Path]::GetFullPath((Join-Path $PWD $OutputDirectory))
-$workspace = [IO.Path]::GetFullPath($PWD.Path)
-if (-not $root.StartsWith($workspace, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Output directory must remain inside the native workspace'
-}
-$fixture = Join-Path $root 'fixture'
-New-Item -ItemType Directory -Force -Path $fixture | Out-Null
+. (Join-Path $PSScriptRoot 'qualification-helpers.ps1')
+$workspace = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$root = New-QualificationDirectory $workspace (Join-Path $workspace $OutputDirectory)
+$fixture = New-QualificationDirectory $root (Join-Path $root 'fixture')
 $utf8 = [Text.UTF8Encoding]::new($false)
 
 $roles = [ordered]@{ drums = 330; bass = 110; other = 550; vocals = 660; master = 220 }
 foreach ($entry in $roles.GetEnumerator()) {
-    $roleDirectory = Join-Path $fixture $entry.Key
-    New-Item -ItemType Directory -Force -Path $roleDirectory | Out-Null
+    $roleDirectory = New-QualificationDirectory $fixture (Join-Path $fixture $entry.Key)
     $source = Join-Path $roleDirectory 'source.wav'
     & ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=$($entry.Value):duration=4:sample_rate=48000" -ac 2 -c:a pcm_f32le $source
     if ($LASTEXITCODE -ne 0) { throw "Failed to generate $($entry.Key) source" }
@@ -27,6 +24,7 @@ foreach ($entry in $roles.GetEnumerator()) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to encode $($entry.Key) segment 1" }
     [IO.File]::WriteAllLines((Join-Path $roleDirectory 'track.m3u8'), @('#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-TARGETDURATION:2', '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-PLAYLIST-TYPE:VOD', '#EXTINF:2.000000,', 'segment-0.m4a', '#EXTINF:2.000000,', 'segment-1.m4a', '#EXT-X-ENDLIST'), $utf8)
     [IO.File]::WriteAllText((Join-Path $roleDirectory 'waveform.json'), (@{ schema = 'stem-waveform-v1'; samples_per_peak = 48000; min = @(-0.5, -0.5, -0.5, -0.5); max = @(0.5, 0.5, 0.5, 0.5) } | ConvertTo-Json -Compress), $utf8)
+    Remove-Item -LiteralPath (Get-QualificationPath $fixture $source) -Force
 }
 
 function Route([string]$role) {
@@ -50,17 +48,16 @@ $manifest = [ordered]@{
     technical = @{ segment_preroll_frames = 1024 }
 }
 [IO.File]::WriteAllText((Join-Path $fixture 'stemset.json'), ($manifest | ConvertTo-Json -Depth 6), $utf8)
-Get-ChildItem $fixture -Filter source.wav -Recurse | Remove-Item -Force
 foreach ($case in 'missing', 'corrupt', 'oversize-segment') {
-    $casePath = Join-Path $root $case
-    Remove-Item $casePath -Recurse -Force -ErrorAction SilentlyContinue
-    Copy-Item $fixture $casePath -Recurse
+    $casePath = Get-QualificationPath $root (Join-Path $root $case)
+    if (Test-Path -LiteralPath $casePath) { throw 'Qualification case output already exists' }
+    Copy-Item -LiteralPath $fixture -Destination $casePath -Recurse
 }
-Remove-Item (Join-Path $root 'missing/bass/segment-1.m4a')
-[IO.File]::WriteAllBytes((Join-Path $root 'corrupt/bass/segment-0.m4a'), [byte[]](0, 1, 2, 3))
-[IO.File]::WriteAllBytes((Join-Path $root 'oversize-segment/bass/segment-0.m4a'), [byte[]]::new(300000))
+Remove-Item -LiteralPath (Get-QualificationPath $root (Join-Path $root 'missing/bass/segment-1.m4a'))
+[IO.File]::WriteAllBytes((Get-QualificationPath $root (Join-Path $root 'corrupt/bass/segment-0.m4a')), [byte[]](0, 1, 2, 3))
+[IO.File]::WriteAllBytes((Get-QualificationPath $root (Join-Path $root 'oversize-segment/bass/segment-0.m4a')), [byte[]]::new(300000))
 
-& cargo build --quiet -p stemplayer-probe --features hls
+& cargo build --locked --quiet --manifest-path (Join-Path $workspace 'Cargo.toml') -p stemplayer-probe --features hls
 if ($LASTEXITCODE -ne 0) { throw 'Probe build failed' }
 $certificate = Join-Path $root 'self-signed.crt'
 $key = Join-Path $root 'self-signed.key'
@@ -74,11 +71,16 @@ $ErrorActionPreference = 'Continue'
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) { throw 'Failed to create TLS qualification certificate' }
 $python = (Get-Command python -ErrorAction Stop).Source
-$server = Start-Process -FilePath $python -ArgumentList @((Join-Path $workspace 'scripts/phase10_http_server.py'), $root, $Port) -WindowStyle Hidden -PassThru
+$serverScript = '"' + (Join-Path $workspace 'scripts/phase10_http_server.py') + '"'
+$serverRoot = '"' + $root + '"'
+$server = $null
+$tlsServer = $null
 $tlsPort = $Port + 1
-$tlsServer = Start-Process -FilePath $python -ArgumentList @((Join-Path $workspace 'scripts/phase10_http_server.py'), $root, $tlsPort, '--certificate', $certificate, '--key', $key) -WindowStyle Hidden -PassThru
 try {
+    $server = Start-Process -FilePath $python -ArgumentList @($serverScript, $serverRoot, $Port) -WindowStyle Hidden -PassThru
+    $tlsServer = Start-Process -FilePath $python -ArgumentList @($serverScript, $serverRoot, $tlsPort, '--certificate', ('"' + $certificate + '"'), '--key', ('"' + $key + '"')) -WindowStyle Hidden -PassThru
     Start-Sleep -Milliseconds 500
+    if ($server.HasExited -or $tlsServer.HasExited) { throw 'Qualification server failed to start' }
     $url = "http://127.0.0.1:$Port/fixture/stemset.json"
     $probe = Join-Path $workspace 'target/debug/stemplayer-probe.exe'
     & $probe hls-validate $url | Set-Content -Encoding utf8 (Join-Path $root 'validation.json')
@@ -134,6 +136,6 @@ try {
         private_fixture = [bool]$PrivateUrl
     } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'qualification.json')
 } finally {
-    Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
-    Stop-Process -Id $tlsServer.Id -Force -ErrorAction SilentlyContinue
+    if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    if ($tlsServer -and -not $tlsServer.HasExited) { Stop-Process -Id $tlsServer.Id -Force -ErrorAction SilentlyContinue }
 }

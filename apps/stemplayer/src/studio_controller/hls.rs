@@ -1,44 +1,16 @@
-use super::{Shared, WorkerState, publish};
+use super::{Shared, WorkerState};
 use std::array;
 use std::sync::Arc;
-use stemplayer_domain::{
-    BoundedText, NetworkDiagnostics, PlayerError, PlayerSnapshot, SampleRate, SourceFrame,
-    TransportState,
-};
+use stemplayer_domain::{BoundedText, NetworkDiagnostics, PlayerError, SampleRate, SourceFrame};
 use stemplayer_engine::{PlaybackEngine, PlaybackSession};
 use stemplayer_network::{HlsClient, HlsPlaybackSource, UreqTransport};
 use stemplayer_waveform::{CacheStatus, Peak, PeakLevel, SourceFingerprint, WaveformSnapshot};
 
 impl WorkerState {
     pub(super) fn open_hls(&mut self, url: &str, shared: &Shared) -> Result<(), PlayerError> {
-        self.close_output()?;
-        self.engine = None;
-        self.analysis = None;
-        self.waveform_error = None;
-        self.fingerprint = None;
-        self.current_source = None;
-        *shared
-            .current_source
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.hls = None;
-        *shared
-            .waveform
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.generation = self.generation.next()?;
-        publish(
-            shared,
-            PlayerSnapshot::new(
-                TransportState::Inspecting,
-                self.generation,
-                None,
-                None,
-                vec![],
-            )?,
-        );
+        self.begin_inspection(None, shared)?;
         let client = HlsClient::new(Arc::new(UreqTransport::default()), cfg!(debug_assertions));
-        let source = client.open(url, &shared.cancel)?;
+        let source = client.open(url, &self.source_cancelled)?;
         let session = PlaybackSession::new_external(
             source.title(),
             source.sample_rate(),
@@ -47,17 +19,11 @@ impl WorkerState {
             self.generation,
             Arc::clone(&source) as Arc<dyn stemplayer_engine::ExternalSource>,
         )?;
-        *shared
-            .waveform
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(remote_waveform(&source, self.generation)?);
-        self.engine = Some(PlaybackEngine::with_cancellation(
-            session,
-            Arc::clone(&shared.cancel),
-        )?);
+        let waveform = remote_waveform(&source, self.generation)?;
+        let engine =
+            PlaybackEngine::with_cancellation(session, Arc::clone(&self.source_cancelled))?;
         self.hls = Some(source);
-        self.publish(shared)
+        self.commit_source(engine, Some(waveform), shared)
     }
 
     pub(super) fn network_diagnostics(&self) -> Option<NetworkDiagnostics> {

@@ -5080,6 +5080,7 @@ dependencies = [
  "sha2 0.10.9",
  "stemplayer-domain",
  "unicode-normalization",
+ "winapi-util",
 ]
 
 [[package]]
@@ -5174,6 +5175,7 @@ dependencies = [
 name = "stemplayer-waveform"
 version = "0.1.0-preview.1"
 dependencies = [
+ "rustix 1.1.4",
  "sha2 0.10.9",
  "stemplayer-domain",
 ]

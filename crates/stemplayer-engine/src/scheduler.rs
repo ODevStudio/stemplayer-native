@@ -87,7 +87,6 @@ impl DecodeScheduler {
         ring: &mut SynchronizedRing,
         target_frames: u64,
     ) -> Result<(), PlayerError> {
-        self.cancelled.store(false, Ordering::Release);
         let target = target_frames.min(session.buffer_config().maximum_frames);
         let end = session.metadata().end_frame_exclusive.get() as u64;
         while ring.buffered_frames() < target && ring.write_frame() < end {
@@ -127,13 +126,20 @@ impl DecodeScheduler {
         start_frame: u64,
         frames: u32,
     ) -> Result<SourceBlock, PlayerError> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(cancelled_decode());
+        }
         match session.source() {
             SessionSource::Studio(bundle) => {
                 self.decode_studio_block(session, bundle, start_frame, frames)
             }
             SessionSource::Compressed { path, container } => {
                 if self.compressed_routes.is_none() {
-                    self.compressed_routes = Some(open_compressed_routes(path, container)?);
+                    self.compressed_routes = Some(open_compressed_routes(
+                        path,
+                        container,
+                        Arc::clone(&self.cancelled),
+                    )?);
                     self.metrics.worker_count = u8::try_from(container.tracks.len()).unwrap();
                 }
                 let cancellation = Arc::clone(&self.cancelled);
@@ -166,8 +172,11 @@ impl DecodeScheduler {
             }
             SessionSource::Audio { path, info } => {
                 if self.audio_decoder.is_none() {
-                    self.audio_decoder =
-                        Some(CompressedTrackDecoder::open_audio(path, info.track_id)?);
+                    self.audio_decoder = Some(CompressedTrackDecoder::open_audio_inspected(
+                        path,
+                        info,
+                        Arc::clone(&self.cancelled),
+                    )?);
                     self.metrics.worker_count = 1;
                 }
                 let window = self.audio_decoder.as_mut().unwrap().decode_window(
@@ -272,6 +281,7 @@ pub(crate) struct DecodeProducer {
     sender: SyncSender<DecodeRequest>,
     receiver: Receiver<DecodeResult>,
     cancelled: Arc<AtomicBool>,
+    source_cancelled: Arc<AtomicBool>,
     pending_generation: Option<stemplayer_domain::GenerationId>,
     metrics: DecodeMetrics,
 }
@@ -289,10 +299,12 @@ struct DecodeResult {
 }
 
 impl DecodeProducer {
-    pub fn new(cancelled: Arc<AtomicBool>) -> Result<Self, PlayerError> {
+    pub fn new(source_cancelled: Arc<AtomicBool>) -> Result<Self, PlayerError> {
         let (sender, requests) = sync_channel::<DecodeRequest>(1);
         let (results, receiver) = sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
+        let worker_source_cancelled = Arc::clone(&source_cancelled);
         thread::Builder::new()
             .name("stemplayer-decode".to_owned())
             .spawn(move || {
@@ -301,11 +313,23 @@ impl DecodeProducer {
                     let generation = request.session.generation();
                     scheduler.metrics.pending_blocks = 1;
                     scheduler.metrics.maximum_pending_blocks = 1;
-                    let block = scheduler.decode_block(
-                        &request.session,
-                        request.start_frame,
-                        request.frames,
-                    );
+                    let block = if worker_source_cancelled.load(Ordering::Acquire) {
+                        scheduler.cancel();
+                        Err(cancelled_decode())
+                    } else {
+                        scheduler.decode_block(
+                            &request.session,
+                            request.start_frame,
+                            request.frames,
+                        )
+                    };
+                    let block = if worker_source_cancelled.load(Ordering::Acquire)
+                        || scheduler.cancelled.load(Ordering::Acquire)
+                    {
+                        Err(cancelled_decode())
+                    } else {
+                        block
+                    };
                     scheduler.metrics.pending_blocks = 0;
                     if let Ok(block) = &block {
                         scheduler.metrics.decoded_frames = scheduler
@@ -333,6 +357,7 @@ impl DecodeProducer {
             sender,
             receiver,
             cancelled,
+            source_cancelled,
             pending_generation: None,
             metrics: DecodeMetrics::default(),
         })
@@ -348,6 +373,10 @@ impl DecodeProducer {
         ring: &mut SynchronizedRing,
         target_frames: u64,
     ) -> Result<(), PlayerError> {
+        if self.source_cancelled.load(Ordering::Acquire) {
+            self.cancel();
+            return Err(cancelled_decode());
+        }
         self.poll(ring)?;
         let target = target_frames.min(session.buffer_config().maximum_frames);
         let end = session.metadata().end_frame_exclusive.get() as u64;
@@ -432,6 +461,16 @@ impl DecodeProducer {
     }
 }
 
+impl Drop for DecodeProducer {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+fn cancelled_decode() -> PlayerError {
+    PlayerError::new(ErrorCode::BundleAborted, "Decode generation was cancelled")
+}
+
 pub struct AnalysisDecoder {
     session: PlaybackSession,
     scheduler: DecodeScheduler,
@@ -458,6 +497,7 @@ impl AnalysisDecoder {
 fn open_compressed_routes(
     path: &std::path::Path,
     container: &stemplayer_decode::CompressedContainer,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<Vec<CompressedRoute>, PlayerError> {
     let mut roles = StemRole::ALL
         .map(TrackRole::Stem)
@@ -484,7 +524,8 @@ fn open_compressed_routes(
                         "Compressed route is missing",
                     )
                 })?;
-            let decoder = CompressedTrackDecoder::open(path, track.info.track_id)?;
+            let decoder =
+                CompressedTrackDecoder::open_inspected(path, &track.info, Arc::clone(&cancelled))?;
             Ok(CompressedRoute { track, decoder })
         })
         .collect()

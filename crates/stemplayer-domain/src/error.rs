@@ -326,6 +326,26 @@ impl ErrorCode {
             Self::ValueOutOfRange | Self::Internal => ErrorCategory::Internal,
         }
     }
+
+    pub const fn recoverability(self) -> Recoverability {
+        match self {
+            Self::TransportStateInvalid
+            | Self::PlaybackSessionClosed
+            | Self::PlaybackNotReady
+            | Self::PlaybackAlreadyActive
+            | Self::BundleAborted => Recoverability::ReloadSession,
+            Self::FeatureUnsupported | Self::HlsRedirectRejected => {
+                Recoverability::ChooseAnotherSource
+            }
+            Self::Internal => Recoverability::RestartApplication,
+            _ => match self.category() {
+                ErrorCategory::Source | ErrorCategory::Timeline => {
+                    Recoverability::ChooseAnotherSource
+                }
+                _ => Recoverability::Retry,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -386,7 +406,7 @@ impl PlayerError {
             user_action: None,
             details: Arc::from([]),
             severity: Severity::Error,
-            recoverability: Recoverability::Retry,
+            recoverability: code.recoverability(),
             source: None,
         }
     }
@@ -475,5 +495,30 @@ mod tests {
                 .with_details(details)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn recovery_metadata_distinguishes_source_session_and_transient_failures() {
+        for (code, recovery) in [
+            (ErrorCode::ManifestInvalid, "choose-another-source"),
+            (ErrorCode::ManifestPathUnsafe, "choose-another-source"),
+            (ErrorCode::DecodeFailed, "choose-another-source"),
+            (ErrorCode::HlsRedirectRejected, "choose-another-source"),
+            (ErrorCode::HlsHttpFailed, "retry"),
+            (ErrorCode::HlsTlsFailed, "retry"),
+            (ErrorCode::CommandQueueFull, "retry"),
+            (ErrorCode::BundleAborted, "reload-session"),
+            (ErrorCode::PlaybackSessionClosed, "reload-session"),
+            (ErrorCode::Internal, "restart-application"),
+        ] {
+            let json = serde_json::to_value(PlayerError::new(code, "Operation failed")).unwrap();
+            assert_eq!(json["recoverability"], recovery, "{}", code.as_str());
+        }
+        for code in ErrorCode::ALL {
+            if matches!(code.category(), ErrorCategory::Source) && code != ErrorCode::BundleAborted
+            {
+                assert_eq!(code.recoverability(), Recoverability::ChooseAnotherSource);
+            }
+        }
     }
 }

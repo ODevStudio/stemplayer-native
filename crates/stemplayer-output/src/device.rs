@@ -1,6 +1,9 @@
+use crate::identity::{endpoint_id, selected_index};
 use crate::ring::{
     OutputConsumer, OutputMetrics, OutputProducer, OutputSample, StereoFrame, output_ring,
+    output_ring_at_generation,
 };
+use crate::{PresentationEstimate, output_refill_interval};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedBufferSize,
@@ -80,7 +83,10 @@ pub struct OutputTestReport {
 }
 
 pub struct DeviceOutput {
-    stream: Stream,
+    stream: Option<Stream>,
+    device: Device,
+    config: StreamConfig,
+    format: SampleFormat,
     producer: OutputProducer,
     stream_errors: Arc<AtomicU64>,
     report: DeviceReport,
@@ -112,9 +118,13 @@ impl DeviceOutput {
             format,
             consumer,
             Arc::clone(&stream_errors),
+            None,
         )?;
         Ok(Self {
-            stream,
+            stream: Some(stream),
+            device: entry.device,
+            config: stream_config,
+            format,
             producer,
             stream_errors,
             report: entry.report,
@@ -131,6 +141,8 @@ impl DeviceOutput {
     pub fn play(&mut self) -> Result<(), PlayerError> {
         if !self.active {
             self.stream
+                .as_ref()
+                .ok_or_else(stream_closed)?
                 .play()
                 .map_err(|error| output_error("Audio stream could not start", error))?;
             self.active = true;
@@ -141,6 +153,8 @@ impl DeviceOutput {
     pub fn pause(&mut self) -> Result<(), PlayerError> {
         if self.active {
             self.stream
+                .as_ref()
+                .ok_or_else(stream_closed)?
                 .pause()
                 .map_err(|error| output_error("Audio stream could not pause", error))?;
             self.active = false;
@@ -149,24 +163,32 @@ impl DeviceOutput {
     }
 
     pub fn clear(&mut self, timeout: Duration) -> Result<(), PlayerError> {
-        self.producer.reset();
-        self.producer.begin_drain();
-        self.play()?;
-        let deadline = Instant::now() + timeout;
-        while self.producer.available() < self.producer.metrics().capacity_frames {
-            if Instant::now() >= deadline {
-                let _ = self.pause();
-                self.producer.reset();
-                return Err(PlayerError::new(
-                    ErrorCode::Internal,
-                    "Timed out while clearing stale output frames",
-                ));
+        let generation = self.producer.generation().checked_add(1).ok_or_else(|| {
+            PlayerError::new(ErrorCode::ValueOutOfRange, "Output generation is exhausted")
+        })?;
+        self.active = false;
+        drop(self.stream.take());
+        let (producer, consumer) =
+            output_ring_at_generation(self.producer.metrics().capacity_frames, generation)?;
+        self.producer = producer;
+        self.stream_errors.store(0, Ordering::Relaxed);
+        match build_stream(
+            &self.device,
+            &self.config,
+            self.format,
+            consumer,
+            Arc::clone(&self.stream_errors),
+            Some(timeout),
+        ) {
+            Ok(stream) => {
+                self.stream = Some(stream);
+                Ok(())
             }
-            thread::sleep(Duration::from_millis(1));
+            Err(error) => {
+                self.stream_errors.fetch_add(1, Ordering::Relaxed);
+                Err(error)
+            }
         }
-        self.pause()?;
-        self.producer.reset();
-        Ok(())
     }
 
     pub fn begin_drain(&self) {
@@ -187,6 +209,43 @@ impl DeviceOutput {
 
     pub fn metrics(&self) -> OutputMetrics {
         self.producer.metrics()
+    }
+
+    pub fn presentation_estimate(&self) -> PresentationEstimate {
+        let metrics = self.metrics();
+        let submission = if self.active {
+            self.producer.presentation_submission()
+        } else {
+            None
+        };
+        let now_ns = self
+            .stream
+            .as_ref()
+            .map_or(0, |stream| stream.now().as_nanos());
+        PresentationEstimate::new(metrics, submission, now_ns)
+    }
+
+    pub fn estimated_drain_complete(
+        &self,
+        elapsed: Duration,
+        timeout: Duration,
+    ) -> Result<bool, PlayerError> {
+        if self.stream_errors() > 0 {
+            return Err(PlayerError::new(
+                ErrorCode::PlaybackNotReady,
+                "Audio output failed while draining",
+            ));
+        }
+        self.presentation_estimate()
+            .drain_complete(elapsed, timeout)
+    }
+
+    pub fn refill_interval(&self, maximum_render_frames: usize) -> Result<Duration, PlayerError> {
+        output_refill_interval(
+            self.producer.metrics().capacity_frames,
+            maximum_render_frames,
+            self.config.sample_rate,
+        )
     }
 
     pub fn stream_errors(&self) -> u64 {
@@ -270,6 +329,7 @@ pub fn run_output_test(options: OutputTestOptions) -> Result<OutputTestReport, P
         format,
         consumer,
         Arc::clone(&stream_errors),
+        None,
     )?;
     stream
         .play()
@@ -346,21 +406,24 @@ fn device_entries() -> Result<Vec<DeviceEntry>, PlayerError> {
         .output_devices()
         .map_err(|error| output_error("Output devices could not be enumerated", error))?;
     let mut entries = Vec::new();
-    for (index, device) in devices.enumerate() {
+    for device in devices {
+        let hardware_id = match device.id() {
+            Ok(id) => id.to_string(),
+            Err(_) => continue,
+        };
         let ranges = match device.supported_output_configs() {
             Ok(configs) => configs.collect::<Vec<_>>(),
             Err(_) => Vec::new(),
         };
         let default = device.default_output_config().ok();
-        let hardware_id = device.id().ok().map(|id| id.to_string());
         let name = device
             .description()
             .map(|description| description.name().to_owned())
             .unwrap_or_else(|_| "Unnamed output device".to_owned());
         let report = DeviceReport {
-            id: session_device_id(index),
+            id: endpoint_id(&hardware_id),
             name,
-            is_default: hardware_id == default_id,
+            is_default: default_id.as_ref() == Some(&hardware_id),
             default_configuration: default.as_ref().map(config_report),
             supported_configurations: ranges.iter().map(range_report).collect(),
             stereo_supported: ranges.iter().any(|range| range.channels() == 2),
@@ -375,21 +438,12 @@ fn device_entries() -> Result<Vec<DeviceEntry>, PlayerError> {
     Ok(entries)
 }
 
-fn session_device_id(index: usize) -> String {
-    format!("device-{}", index + 1)
-}
-
 fn select_device(
     entries: Vec<DeviceEntry>,
     selected_id: Option<&str>,
 ) -> Result<DeviceEntry, PlayerError> {
-    let selected = match selected_id {
-        Some(id) => entries.into_iter().find(|entry| entry.report.id == id),
-        None => entries
-            .iter()
-            .position(|entry| entry.report.is_default)
-            .and_then(|index| entries.into_iter().nth(index)),
-    };
+    let index = selected_index(entries.iter().map(|entry| &entry.report), selected_id);
+    let selected = index.and_then(|index| entries.into_iter().nth(index));
     selected
         .filter(|entry| entry.report.stereo_supported)
         .ok_or_else(|| {
@@ -501,14 +555,27 @@ fn build_stream(
     format: SampleFormat,
     consumer: OutputConsumer,
     stream_errors: Arc<AtomicU64>,
+    timeout: Option<Duration>,
 ) -> Result<Stream, PlayerError> {
     match format {
-        SampleFormat::F32 => build_typed_stream::<f32>(device, config, consumer, stream_errors),
-        SampleFormat::F64 => build_typed_stream::<f64>(device, config, consumer, stream_errors),
-        SampleFormat::I16 => build_typed_stream::<i16>(device, config, consumer, stream_errors),
-        SampleFormat::U16 => build_typed_stream::<u16>(device, config, consumer, stream_errors),
-        SampleFormat::I32 => build_typed_stream::<i32>(device, config, consumer, stream_errors),
-        SampleFormat::U32 => build_typed_stream::<u32>(device, config, consumer, stream_errors),
+        SampleFormat::F32 => {
+            build_typed_stream::<f32>(device, config, consumer, stream_errors, timeout)
+        }
+        SampleFormat::F64 => {
+            build_typed_stream::<f64>(device, config, consumer, stream_errors, timeout)
+        }
+        SampleFormat::I16 => {
+            build_typed_stream::<i16>(device, config, consumer, stream_errors, timeout)
+        }
+        SampleFormat::U16 => {
+            build_typed_stream::<u16>(device, config, consumer, stream_errors, timeout)
+        }
+        SampleFormat::I32 => {
+            build_typed_stream::<i32>(device, config, consumer, stream_errors, timeout)
+        }
+        SampleFormat::U32 => {
+            build_typed_stream::<u32>(device, config, consumer, stream_errors, timeout)
+        }
         _ => Err(PlayerError::new(
             ErrorCode::FeatureUnsupported,
             "The negotiated device sample format is unsupported",
@@ -521,24 +588,27 @@ fn build_typed_stream<T>(
     config: &StreamConfig,
     mut consumer: OutputConsumer,
     stream_errors: Arc<AtomicU64>,
+    timeout: Option<Duration>,
 ) -> Result<Stream, PlayerError>
 where
     T: SizedSample + OutputSample,
 {
     let channels = usize::from(config.channels);
+    let sample_rate = config.sample_rate;
     device
         .build_output_stream(
             *config,
-            move |output: &mut [T], _| {
+            move |output: &mut [T], info| {
                 let started = Instant::now();
                 let frames = output.len() / channels;
                 consumer.write(output, channels);
+                consumer.record_presentation(info.timestamp().playback.as_nanos(), sample_rate);
                 consumer.record_callback(frames, started.elapsed());
             },
             move |_| {
                 stream_errors.fetch_add(1, Ordering::Relaxed);
             },
-            None,
+            timeout,
         )
         .map_err(|error| output_error("Audio stream could not be created", error))
 }
@@ -585,6 +655,10 @@ fn output_error(
     PlayerError::new(ErrorCode::Internal, summary).with_source(source)
 }
 
+fn stream_closed() -> PlayerError {
+    PlayerError::new(ErrorCode::PlaybackNotReady, "Audio output must be reopened")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,11 +701,5 @@ mod tests {
         let frame = sine_frame(100, 48_000, 0.1);
         assert_eq!(frame.left, frame.right);
         assert!(frame.left.abs() <= 0.1);
-    }
-
-    #[test]
-    fn device_ids_do_not_expose_hardware_details() {
-        assert_eq!(session_device_id(0), "device-1");
-        assert_eq!(session_device_id(99), "device-100");
     }
 }

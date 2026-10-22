@@ -1,3 +1,4 @@
+use crate::OutputMetrics;
 use serde::Serialize;
 use stemplayer_domain::{ErrorCode, PlayerError};
 
@@ -68,11 +69,24 @@ impl AudioClock {
         self.latency_confidence = confidence;
     }
 
+    pub fn synchronize_output(&mut self, metrics: &OutputMetrics) {
+        if self.generation != metrics.generation {
+            self.reset(metrics.generation);
+        }
+        self.rendered_device_frames = metrics.generation_produced_frames;
+        self.consumed_device_frames = metrics.generation_consumed_frames;
+        self.queued_device_frames = metrics
+            .generation_produced_frames
+            .saturating_sub(metrics.generation_consumed_frames);
+    }
+
     pub fn reset(&mut self, generation: u64) {
         self.generation = generation;
         self.rendered_device_frames = 0;
         self.queued_device_frames = 0;
         self.consumed_device_frames = 0;
+        self.latency_frames = None;
+        self.latency_confidence = LatencyConfidence::Unknown;
     }
 
     pub fn snapshot(&self) -> ClockSnapshot {
@@ -115,6 +129,7 @@ mod tests {
         let mut clock = AudioClock::new(48_000, 48_000).unwrap();
         clock.record_rendered(100, 50);
         clock.record_consumed(50, 50);
+        clock.set_latency(Some(10), LatencyConfidence::Estimated);
         clock.reset(9);
         assert_eq!(
             clock.snapshot(),
@@ -129,5 +144,25 @@ mod tests {
                 latency_confidence: LatencyConfidence::Unknown,
             }
         );
+    }
+
+    #[test]
+    fn resampler_prefill_and_underrun_silence_do_not_advance_the_source_clock() {
+        let (mut producer, mut consumer) = crate::output_ring(2_048).unwrap();
+        producer.push_slice(&[crate::StereoFrame::default(); 1_760]);
+        let mut clock = AudioClock::new(44_100, 48_000).unwrap();
+        clock.synchronize_output(&producer.metrics());
+        assert_eq!(clock.snapshot().source_frames, 0);
+        consumer.write(&mut [0.0_f32; 800], 2);
+        clock.synchronize_output(&producer.metrics());
+        assert_eq!(clock.snapshot().source_frames, 367);
+        consumer.write(&mut [0.0_f32; 4_000], 2);
+        clock.synchronize_output(&producer.metrics());
+        assert_eq!(clock.snapshot().consumed_device_frames, 1_760);
+        assert_eq!(clock.snapshot().source_frames, 1_617);
+        producer.reset();
+        clock.synchronize_output(&producer.metrics());
+        assert_eq!(clock.snapshot().generation, 1);
+        assert_eq!(clock.snapshot().source_frames, 0);
     }
 }

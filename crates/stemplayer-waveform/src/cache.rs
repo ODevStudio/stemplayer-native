@@ -1,24 +1,31 @@
 use sha2::{Digest, Sha256};
 use std::array;
-use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use stemplayer_domain::{ErrorCode, GenerationId, PlayerError, SampleRate, SourceFrame};
 
 use crate::analyzer::WAVEFORM_COLUMNS;
+use crate::cache_io::CacheFileAccess;
+use crate::cache_root::CacheRoot;
 use crate::{
     CacheStatus, ConsistencySummary, Peak, PeakLevel, SourceFingerprint, WaveformSnapshot,
 };
+
+#[cfg(windows)]
+#[path = "cache_windows.rs"]
+mod windows;
 
 const MAGIC: &[u8; 8] = b"SPWF0001";
 const SCHEMA: u16 = 1;
 const EXTENSION: &str = "spwf";
 const MAX_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SCAN_ENTRIES: usize = 4_096;
+const MAX_RECOVERY_ENTRIES: usize = MAX_SCAN_ENTRIES * 2;
+#[cfg(not(windows))]
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
@@ -51,11 +58,10 @@ pub struct CacheResult {
 }
 
 pub struct WaveformCache {
-    root: PathBuf,
+    root: CacheRoot,
     enabled: bool,
     capacity_bytes: AtomicU64,
     maximum_entries: usize,
-    cleaned: AtomicBool,
     operation: Mutex<()>,
 }
 
@@ -67,13 +73,12 @@ impl WaveformCache {
         {
             return Err(error("Waveform cache limits are invalid"));
         }
-        ensure_root(&root)?;
+        let root = CacheRoot::new(root)?;
         Ok(Self {
             root,
             enabled: config.enabled,
             capacity_bytes: AtomicU64::new(config.capacity_bytes),
             maximum_entries: config.maximum_entries,
-            cleaned: AtomicBool::new(false),
             operation: Mutex::new(()),
         })
     }
@@ -92,17 +97,20 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Ok(_root) = self.root.guard() else {
+            return result(CacheStatus::Error);
+        };
         if self.cleanup_temporary().is_err() {
             return result(CacheStatus::Error);
         }
-        let path = self.path(fingerprint);
-        let bytes = match read_record(&path) {
+        let name = self.name(fingerprint);
+        let bytes = match read_record(&self.root, &name) {
             Ok(bytes) => bytes,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return result(CacheStatus::Miss);
             }
             Err(_) => {
-                let _ = fs::remove_file(path);
+                let _ = self.root.remove(&name);
                 return result(CacheStatus::Error);
             }
         };
@@ -112,7 +120,7 @@ impl WaveformCache {
                     && snapshot.start_frame == expected_timeline.start
                     && snapshot.end_frame_exclusive == expected_timeline.end =>
             {
-                touch(&path);
+                touch(&self.root, &name);
                 CacheResult {
                     status: CacheStatus::Hit,
                     snapshot: Some(snapshot),
@@ -120,7 +128,7 @@ impl WaveformCache {
                 }
             }
             Ok(_) | Err(_) => {
-                let _ = fs::remove_file(path);
+                let _ = self.root.remove(&name);
                 result(CacheStatus::Error)
             }
         }
@@ -134,6 +142,7 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _root = self.root.guard()?;
         self.cleanup_temporary()?;
         let bytes = encode(snapshot)?;
         if bytes.len() as u64 > MAX_RECORD_BYTES
@@ -141,22 +150,41 @@ impl WaveformCache {
         {
             return Err(error("Waveform cache record exceeds its limit"));
         }
-        self.evict(bytes.len() as u64, Some(snapshot.fingerprint))?;
-        let final_path = self.path(snapshot.fingerprint);
-        if final_path.exists() {
+        #[cfg(windows)]
+        {
+            self.write_guarded(snapshot, &bytes)
+        }
+        #[cfg(not(windows))]
+        {
+            self.write_temporary(snapshot, &bytes)
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn write_temporary(
+        &self,
+        snapshot: &WaveformSnapshot,
+        bytes: &[u8],
+    ) -> Result<(), PlayerError> {
+        let final_name = self.name(snapshot.fingerprint);
+        if self
+            .root
+            .metadata(&final_name)
+            .is_ok_and(|metadata| metadata.regular)
+        {
             return Ok(());
         }
+        self.evict(bytes.len() as u64, Some(snapshot.fingerprint))?;
         let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let temporary = self.root.join(format!(
+        let temporary = PathBuf::from(format!(
             ".{}-{}-{id}.tmp",
             snapshot.fingerprint.hex(),
             std::process::id()
         ));
         let write_result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
+            let mut file = self
+                .root
+                .open(&temporary, CacheFileAccess::Create)
                 .map_err(|source| {
                     io_error("Waveform cache temporary file cannot be created", source)
                 })?;
@@ -167,17 +195,19 @@ impl WaveformCache {
                     std::io::Error::from(kind),
                 ));
             }
-            file.write_all(&bytes)
+            file.write_all(bytes)
                 .and_then(|_| file.sync_all())
                 .map_err(|source| io_error("Waveform cache record cannot be flushed", source))?;
-            let verified = read_record(&temporary)
+            drop(file);
+            let verified = read_record(&self.root, &temporary)
                 .map_err(|source| io_error("Waveform cache record cannot be validated", source))?;
             decode(&verified, snapshot.fingerprint, snapshot.generation)?;
-            fs::rename(&temporary, &final_path)
+            self.root
+                .rename(&temporary, &final_name)
                 .map_err(|source| io_error("Waveform cache record cannot be committed", source))
         })();
         if write_result.is_err() {
-            let _ = fs::remove_file(&temporary);
+            let _ = self.root.remove(&temporary);
         }
         write_result
     }
@@ -187,8 +217,9 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _root = self.root.guard()?;
         self.cleanup_temporary()?;
-        remove_if_present(&self.path(fingerprint))
+        remove_if_present(&self.root, &self.name(fingerprint))
     }
 
     pub fn clear_all(&self) -> Result<(), PlayerError> {
@@ -196,9 +227,10 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _root = self.root.guard()?;
         self.cleanup_temporary()?;
         for entry in entries(&self.root)? {
-            remove_if_present(&entry.path)?;
+            remove_if_present(&self.root, &entry.name)?;
         }
         Ok(())
     }
@@ -211,40 +243,39 @@ impl WaveformCache {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _root = self.root.guard()?;
         self.cleanup_temporary()?;
         let mut entries = entries(&self.root)?;
         entries.sort_by_key(|entry| entry.modified);
-        let mut bytes = entries.iter().map(|entry| entry.bytes).sum::<u64>();
+        let mut bytes = total_bytes(&entries)?;
         while bytes > capacity_bytes || entries.len() > self.maximum_entries {
             let entry = entries.remove(0);
-            remove_if_present(&entry.path)?;
+            remove_if_present(&self.root, &entry.name)?;
             bytes = bytes.saturating_sub(entry.bytes);
         }
         self.capacity_bytes.store(capacity_bytes, Ordering::Release);
         Ok(())
     }
 
+    fn name(&self, fingerprint: SourceFingerprint) -> PathBuf {
+        PathBuf::from(format!("{}.{}", fingerprint.hex(), EXTENSION))
+    }
+
+    #[cfg(test)]
     fn path(&self, fingerprint: SourceFingerprint) -> PathBuf {
-        self.root
-            .join(format!("{}.{}", fingerprint.hex(), EXTENSION))
+        self.root.path.join(self.name(fingerprint))
     }
 
     fn cleanup_temporary(&self) -> Result<(), PlayerError> {
-        if self.cleaned.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        for item in fs::read_dir(&self.root)
+        for name in self
+            .root
+            .names(MAX_RECOVERY_ENTRIES)
             .map_err(|source| io_error("Waveform cache directory cannot be read", source))?
-            .take(MAX_SCAN_ENTRIES)
         {
-            let path = item
-                .map_err(|source| io_error("Waveform cache entry cannot be read", source))?
-                .path();
-            if path.extension().and_then(|value| value.to_str()) == Some("tmp") {
-                let _ = fs::remove_file(path);
+            if name.extension().and_then(|value| value.to_str()) == Some("tmp") {
+                remove_if_present(&self.root, &name)?;
             }
         }
-        self.cleaned.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -253,21 +284,21 @@ impl WaveformCache {
         incoming_bytes: u64,
         retained: Option<SourceFingerprint>,
     ) -> Result<(), PlayerError> {
-        let retained = retained.map(|value| self.path(value));
+        let retained = retained.map(|value| self.name(value));
         let mut entries = entries(&self.root)?;
         entries.sort_by_key(|entry| entry.modified);
-        let mut bytes = entries.iter().map(|entry| entry.bytes).sum::<u64>();
+        let mut bytes = total_bytes(&entries)?;
         while bytes.saturating_add(incoming_bytes) > self.capacity_bytes.load(Ordering::Acquire)
             || entries.len() >= self.maximum_entries
         {
             let Some(index) = entries
                 .iter()
-                .position(|entry| retained.as_ref() != Some(&entry.path))
+                .position(|entry| retained.as_ref() != Some(&entry.name))
             else {
                 break;
             };
             let entry = entries.remove(index);
-            remove_if_present(&entry.path)?;
+            remove_if_present(&self.root, &entry.name)?;
             bytes = bytes.saturating_sub(entry.bytes);
         }
         Ok(())
@@ -275,26 +306,29 @@ impl WaveformCache {
 }
 
 struct Entry {
-    path: PathBuf,
+    name: PathBuf,
     bytes: u64,
     modified: SystemTime,
 }
 
-fn read_record(path: &Path) -> std::io::Result<Vec<u8>> {
+fn total_bytes(entries: &[Entry]) -> Result<u64, PlayerError> {
+    entries.iter().try_fold(0_u64, |total, entry| {
+        total
+            .checked_add(entry.bytes)
+            .ok_or_else(|| error("Waveform cache byte count exceeds its limit"))
+    })
+}
+
+fn read_record(root: &CacheRoot, name: &Path) -> std::io::Result<Vec<u8>> {
     let invalid = || {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "waveform cache record is not a bounded regular file",
         )
     };
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES
-    {
-        return Err(invalid());
-    }
-    let file = fs::File::open(path)?;
+    let file = root.open(name, CacheFileAccess::Read)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
+    if metadata.len() > MAX_RECORD_BYTES {
         return Err(invalid());
     }
     let mut bytes = Vec::new();
@@ -305,43 +339,32 @@ fn read_record(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn entries(root: &Path) -> Result<Vec<Entry>, PlayerError> {
+fn entries(root: &CacheRoot) -> Result<Vec<Entry>, PlayerError> {
+    entries_with_limit(root, MAX_RECOVERY_ENTRIES)
+}
+
+fn entries_with_limit(root: &CacheRoot, limit: usize) -> Result<Vec<Entry>, PlayerError> {
     let mut entries = Vec::new();
-    let directory = fs::read_dir(root)
+    let directory = root
+        .names(limit)
         .map_err(|source| io_error("Waveform cache directory cannot be read", source))?;
-    for (index, item) in directory.take(MAX_SCAN_ENTRIES + 1).enumerate() {
-        if index == MAX_SCAN_ENTRIES {
-            return Err(error("Waveform cache directory exceeds its scan limit"));
-        }
-        let item =
-            item.map_err(|source| io_error("Waveform cache entry cannot be read", source))?;
-        let path = item.path();
-        if path.extension().and_then(|value| value.to_str()) != Some(EXTENSION) {
+    for name in directory {
+        if name.extension().and_then(|value| value.to_str()) != Some(EXTENSION) {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)
+        let metadata = root
+            .metadata(&name)
             .map_err(|source| io_error("Waveform cache metadata is unavailable", source))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+        if !metadata.regular {
             continue;
         }
         entries.push(Entry {
-            path,
-            bytes: metadata.len(),
-            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            name,
+            bytes: metadata.bytes,
+            modified: metadata.modified,
         });
     }
     Ok(entries)
-}
-
-fn ensure_root(root: &Path) -> Result<(), PlayerError> {
-    fs::create_dir_all(root)
-        .map_err(|source| io_error("Waveform cache directory cannot be created", source))?;
-    let metadata = fs::symlink_metadata(root)
-        .map_err(|source| io_error("Waveform cache directory metadata is unavailable", source))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(error("Waveform cache root is unsafe"));
-    }
-    Ok(())
 }
 
 fn valid_peak(peak: &Peak) -> bool {
@@ -556,8 +579,8 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn touch(path: &Path) {
-    if let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) {
+fn touch(root: &CacheRoot, name: &Path) {
+    if let Ok(mut file) = root.open(name, CacheFileAccess::Update) {
         let mut byte = [0];
         if file.read_exact(&mut byte).is_ok() && file.seek(SeekFrom::Start(0)).is_ok() {
             let _ = file.write_all(&byte);
@@ -565,8 +588,8 @@ fn touch(path: &Path) {
     }
 }
 
-fn remove_if_present(path: &Path) -> Result<(), PlayerError> {
-    match fs::remove_file(path) {
+fn remove_if_present(root: &CacheRoot, name: &Path) -> Result<(), PlayerError> {
+    match root.remove(name) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(io_error("Waveform cache entry cannot be removed", source)),
@@ -590,351 +613,5 @@ fn io_error(summary: &str, source: std::io::Error) -> PlayerError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::PeakAnalyzer;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-
-    struct Fixture(PathBuf);
-
-    impl Fixture {
-        fn new() -> Self {
-            let id = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "stemplayer-waveform-cache-{}-{id}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn snapshot(fingerprint: SourceFingerprint) -> WaveformSnapshot {
-        let mut analyzer = PeakAnalyzer::new(
-            GenerationId::INITIAL,
-            fingerprint,
-            SourceFrame::new(0),
-            SourceFrame::new(257),
-            SampleRate::new(48_000).unwrap(),
-        )
-        .unwrap();
-        analyzer
-            .ingest(SourceFrame::new(0), 257, 8, &vec![0.25; 257 * 8])
-            .unwrap();
-        analyzer.finish(CacheStatus::Miss).unwrap()
-    }
-
-    fn load(cache: &WaveformCache, fingerprint: SourceFingerprint) -> CacheResult {
-        cache.load(
-            fingerprint,
-            GenerationId::INITIAL,
-            SampleRate::new(48_000).unwrap(),
-            SourceFrame::new(0)..SourceFrame::new(257),
-        )
-    }
-
-    fn ordinary_snapshot(fingerprint: SourceFingerprint) -> WaveformSnapshot {
-        let frames = 4_096_usize;
-        let mut analyzer = PeakAnalyzer::new(
-            GenerationId::INITIAL,
-            fingerprint,
-            SourceFrame::new(0),
-            SourceFrame::new(frames as i64),
-            SampleRate::new(48_000).unwrap(),
-        )
-        .unwrap();
-        analyzer.enable_frequency_bands().unwrap();
-        analyzer
-            .ingest(
-                SourceFrame::new(0),
-                frames as u32,
-                8,
-                &vec![0.25; frames * 8],
-            )
-            .unwrap();
-        analyzer.finish(CacheStatus::Miss).unwrap()
-    }
-
-    #[test]
-    fn stale_temporary_files_are_cleaned_on_first_cache_operation() {
-        let fixture = Fixture::new();
-        let temporary = fixture.0.join("stale.tmp");
-        fs::write(&temporary, b"partial").unwrap();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        assert!(temporary.exists());
-
-        assert_eq!(
-            load(&cache, SourceFingerprint::from_bytes([8; 32])).status,
-            CacheStatus::Miss
-        );
-        assert!(!temporary.exists());
-    }
-
-    #[test]
-    fn miss_write_hit_corruption_and_clear_are_disposable() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([9; 32]);
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Miss);
-        cache.write(&snapshot(fingerprint)).unwrap();
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Hit);
-        fs::write(cache.path(fingerprint), b"corrupt").unwrap();
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Miss);
-        cache.clear_all().unwrap();
-    }
-
-    #[test]
-    fn cache_hit_requires_matching_source_metadata() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([11; 32]);
-        let waveform = snapshot(fingerprint);
-
-        for (sample_rate, timeline) in [
-            (
-                SampleRate::new(44_100).unwrap(),
-                SourceFrame::new(0)..SourceFrame::new(257),
-            ),
-            (
-                SampleRate::new(48_000).unwrap(),
-                SourceFrame::new(1)..SourceFrame::new(257),
-            ),
-            (
-                SampleRate::new(48_000).unwrap(),
-                SourceFrame::new(0)..SourceFrame::new(258),
-            ),
-        ] {
-            cache.write(&waveform).unwrap();
-            let result = cache.load(fingerprint, GenerationId::INITIAL, sample_rate, timeline);
-            assert_eq!(result.status, CacheStatus::Error);
-            assert!(result.snapshot.is_none());
-        }
-    }
-
-    #[test]
-    fn record_reader_rejects_oversized_and_non_regular_files() {
-        let fixture = Fixture::new();
-        let path = fixture.0.join("record.spwf");
-        let file = fs::File::create(&path).unwrap();
-        file.set_len(MAX_RECORD_BYTES + 1).unwrap();
-        drop(file);
-        assert_eq!(
-            read_record(&path).unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
-        );
-        fs::remove_file(&path).unwrap();
-        fs::create_dir(&path).unwrap();
-        assert_eq!(
-            read_record(&path).unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
-        );
-    }
-
-    #[test]
-    fn scan_limit_counts_unrelated_directory_entries() {
-        let fixture = Fixture::new();
-        for index in 0..=MAX_SCAN_ENTRIES {
-            fs::write(fixture.0.join(format!("{index}.txt")), []).unwrap();
-        }
-
-        assert!(entries(&fixture.0).is_err());
-    }
-
-    #[test]
-    fn single_level_ordinary_waveform_round_trips() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([8; 32]);
-        cache.write(&ordinary_snapshot(fingerprint)).unwrap();
-        let restored = cache
-            .load(
-                fingerprint,
-                GenerationId::INITIAL,
-                SampleRate::new(48_000).unwrap(),
-                SourceFrame::new(0)..SourceFrame::new(4_096),
-            )
-            .snapshot
-            .unwrap();
-        assert_eq!(restored.levels.len(), 1);
-        assert_eq!(restored.levels[0].roles[0].len(), 1_024);
-    }
-
-    #[test]
-    fn inverted_peaks_are_rejected_on_encode_and_decode() {
-        let fingerprint = SourceFingerprint::from_bytes([10; 32]);
-        let mut invalid = snapshot(fingerprint);
-        let level = &invalid.levels[0];
-        let mut roles = level.roles.clone();
-        let mut peaks = roles[0].to_vec();
-        peaks[0] = Peak {
-            minimum: 1.0,
-            maximum: -1.0,
-        };
-        roles[0] = peaks.into();
-        invalid.levels = vec![PeakLevel {
-            frames_per_peak: level.frames_per_peak,
-            roles,
-        }]
-        .into();
-        assert!(encode(&invalid).is_err());
-
-        let mut encoded = encode(&snapshot(fingerprint)).unwrap();
-        let checksum_start = encoded.len() - 32;
-        let first_peak = MAGIC.len()
-            + size_of::<u16>()
-            + 32
-            + size_of::<u32>()
-            + size_of::<i64>() * 2
-            + size_of::<u8>()
-            + size_of::<u32>()
-            + size_of::<u64>();
-        encoded[first_peak..first_peak + 4].copy_from_slice(&1.0_f32.to_le_bytes());
-        encoded[first_peak + 4..first_peak + 8].copy_from_slice(&(-1.0_f32).to_le_bytes());
-        let checksum = Sha256::digest(&encoded[..checksum_start]);
-        encoded[checksum_start..].copy_from_slice(&checksum);
-
-        assert!(decode(&encoded, fingerprint, GenerationId::INITIAL).is_err());
-    }
-
-    #[test]
-    fn serialized_cache_contains_no_source_names_or_pcm() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([5; 32]);
-        cache.write(&snapshot(fingerprint)).unwrap();
-        let bytes = fs::read(cache.path(fingerprint)).unwrap();
-        assert!(
-            !bytes
-                .windows(b"private-song.wav".len())
-                .any(|part| part == b"private-song.wav")
-        );
-        assert!(
-            !bytes
-                .windows(b"C:\\Users\\Private".len())
-                .any(|part| part == b"C:\\Users\\Private")
-        );
-    }
-
-    #[test]
-    fn unknown_version_is_deleted_as_a_miss() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([6; 32]);
-        cache.write(&snapshot(fingerprint)).unwrap();
-        let path = cache.path(fingerprint);
-        let mut bytes = fs::read(&path).unwrap();
-        bytes[8..10].copy_from_slice(&99_u16.to_le_bytes());
-        let checksum = Sha256::digest(&bytes[..bytes.len() - 32]);
-        let checksum_start = bytes.len() - 32;
-        bytes[checksum_start..].copy_from_slice(&checksum);
-        fs::write(&path, bytes).unwrap();
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
-        assert!(!path.exists());
-    }
-    #[test]
-    fn hostile_timeline_and_resolution_are_rejected_without_allocation() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([7; 32]);
-        let waveform = snapshot(fingerprint);
-        cache.write(&waveform).unwrap();
-        let path = cache.path(fingerprint);
-        let mut bytes = fs::read(&path).unwrap();
-        bytes[46..54].copy_from_slice(&i64::MIN.to_le_bytes());
-        bytes[54..62].copy_from_slice(&i64::MAX.to_le_bytes());
-        let checksum_start = bytes.len() - 32;
-        let checksum = Sha256::digest(&bytes[..checksum_start]);
-        bytes[checksum_start..].copy_from_slice(&checksum);
-        fs::write(&path, bytes).unwrap();
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
-
-        cache.write(&waveform).unwrap();
-        let mut bytes = fs::read(&path).unwrap();
-        bytes[63..67].copy_from_slice(&0_u32.to_le_bytes());
-        let checksum_start = bytes.len() - 32;
-        let checksum = Sha256::digest(&bytes[..checksum_start]);
-        bytes[checksum_start..].copy_from_slice(&checksum);
-        fs::write(&path, bytes).unwrap();
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Error);
-    }
-
-    #[test]
-    fn entry_limit_evicts_the_oldest_record() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(
-            fixture.0.clone(),
-            CacheConfig {
-                maximum_entries: 1,
-                ..CacheConfig::default()
-            },
-        )
-        .unwrap();
-        let first = SourceFingerprint::from_bytes([1; 32]);
-        let second = SourceFingerprint::from_bytes([2; 32]);
-        cache.write(&snapshot(first)).unwrap();
-        cache.write(&snapshot(second)).unwrap();
-        assert_eq!(load(&cache, first).status, CacheStatus::Miss);
-        assert_eq!(load(&cache, second).status, CacheStatus::Hit);
-    }
-
-    #[test]
-    fn reducing_capacity_evicts_existing_records() {
-        let fixture = Fixture::new();
-        let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-        let fingerprint = SourceFingerprint::from_bytes([3; 32]);
-        cache.write(&snapshot(fingerprint)).unwrap();
-        cache.set_capacity_bytes(1).unwrap();
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Miss);
-        assert!(cache.write(&snapshot(fingerprint)).is_err());
-    }
-
-    #[test]
-    fn concurrent_same_key_writes_publish_one_valid_record() {
-        let fixture = Fixture::new();
-        let cache = std::sync::Arc::new(
-            WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap(),
-        );
-        let fingerprint = SourceFingerprint::from_bytes([4; 32]);
-        let waveform = snapshot(fingerprint);
-        let handles = (0..2)
-            .map(|_| {
-                let cache = std::sync::Arc::clone(&cache);
-                let waveform = waveform.clone();
-                std::thread::spawn(move || cache.write(&waveform))
-            })
-            .collect::<Vec<_>>();
-        for handle in handles {
-            handle.join().unwrap().unwrap();
-        }
-        assert_eq!(load(&cache, fingerprint).status, CacheStatus::Hit);
-    }
-
-    #[test]
-    fn disk_full_and_read_only_failures_leave_no_cache_entry() {
-        for (index, kind) in [
-            std::io::ErrorKind::StorageFull,
-            std::io::ErrorKind::PermissionDenied,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let fixture = Fixture::new();
-            let cache = WaveformCache::new(fixture.0.clone(), CacheConfig::default()).unwrap();
-            let fingerprint = SourceFingerprint::from_bytes([index as u8; 32]);
-            WRITE_FAILURE.set(Some(kind));
-            let result = cache.write(&snapshot(fingerprint));
-            WRITE_FAILURE.set(None);
-            assert!(result.is_err());
-            assert!(fs::read_dir(&fixture.0).unwrap().next().is_none());
-        }
-    }
-}
+#[path = "cache_tests.rs"]
+mod tests;

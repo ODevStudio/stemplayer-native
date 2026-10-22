@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use stemplayer_decode::{DecodedSegment, decode_aac_segment};
@@ -133,7 +133,11 @@ impl HlsPlaybackSource {
             .ok_or_else(|| invalid(ErrorCode::HlsTimelineMismatch, "HLS frame has no segment"))
     }
 
-    fn ensure_group(&self, index: usize, cancelled: &AtomicBool) -> Result<(), PlayerError> {
+    fn ensure_group(
+        &self,
+        index: usize,
+        cancelled: &AtomicBool,
+    ) -> Result<MutexGuard<'_, State>, PlayerError> {
         {
             let mut state = self
                 .state
@@ -143,7 +147,7 @@ impl HlsPlaybackSource {
                 let group = state.groups.remove(position).unwrap();
                 state.groups.push_front(group);
                 state.diagnostics.current_group = Some(index);
-                return Ok(());
+                return Ok(state);
             }
             state.diagnostics.buffering_count = state.diagnostics.buffering_count.saturating_add(1);
         }
@@ -171,9 +175,18 @@ impl HlsPlaybackSource {
             )?;
             decoded.push(audio);
         }
+        self.cache_group(index, decoded, started)
+    }
+
+    fn cache_group(
+        &self,
+        index: usize,
+        decoded: Vec<DecodedSegment>,
+        started: Instant,
+    ) -> Result<MutexGuard<'_, State>, PlayerError> {
         let bytes = decoded
             .iter()
-            .map(|audio| (audio.left.len() + audio.right.len()) * size_of::<f32>())
+            .map(|audio| (audio.left.capacity() + audio.right.capacity()) * size_of::<f32>())
             .sum::<usize>();
         if bytes > CACHE_CAPACITY_BYTES {
             return Err(invalid(
@@ -185,42 +198,39 @@ impl HlsPlaybackSource {
             .iter()
             .map(|audio| u64::from(audio.packets))
             .sum::<u64>();
-        let preroll = u64::try_from(descriptor.trim_start_frames * decoded.len()).unwrap();
+        let preroll =
+            u64::try_from(self.playlists[0].segments[index].trim_start_frames * decoded.len())
+                .unwrap();
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while state
-            .groups
-            .iter()
-            .map(|group| group.bytes)
-            .sum::<usize>()
-            .saturating_add(bytes)
-            > CACHE_CAPACITY_BYTES
-        {
-            if state.groups.pop_back().is_none() {
+        while state.diagnostics.cache_bytes + bytes as u64 > CACHE_CAPACITY_BYTES as u64 {
+            let Some(group) = state.groups.pop_back() else {
                 break;
-            }
+            };
+            state.diagnostics.cache_bytes -= group.bytes as u64;
         }
         state.groups.push_front(CachedGroup {
             index,
             decoded,
             bytes,
         });
-        let current_bytes = state.groups.iter().map(|group| group.bytes).sum::<usize>();
         state.diagnostics.group_ready_us = elapsed_us(started.elapsed());
         state.diagnostics.recovery_us = state.diagnostics.group_ready_us;
         state.diagnostics.current_group = Some(index);
-        state.diagnostics.cache_bytes = current_bytes as u64;
-        state.diagnostics.peak_cache_bytes =
-            state.diagnostics.peak_cache_bytes.max(current_bytes as u64);
+        state.diagnostics.cache_bytes += bytes as u64;
+        state.diagnostics.peak_cache_bytes = state
+            .diagnostics
+            .peak_cache_bytes
+            .max(state.diagnostics.cache_bytes);
         state.diagnostics.packets_decoded =
             state.diagnostics.packets_decoded.saturating_add(packets);
         state.diagnostics.discarded_preroll_frames = state
             .diagnostics
             .discarded_preroll_frames
             .saturating_add(preroll);
-        Ok(())
+        Ok(state)
     }
 
     fn fetch_with_retry(
@@ -296,15 +306,11 @@ impl ExternalSource for HlsPlaybackSource {
         let mut current = start_frame;
         while current < end_frame {
             let index = self.group_index(current)?;
-            self.ensure_group(index, cancelled)?;
+            let state = self.ensure_group(index, cancelled)?;
             let segment = &self.playlists[0].segments[index];
             let copy_end = end_frame.min(segment.end_frame_exclusive);
             let offset = usize::try_from(current - segment.start_frame).unwrap();
             let copy_frames = usize::try_from(copy_end - current).unwrap();
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let group = state
                 .groups
                 .front()
@@ -348,3 +354,6 @@ fn segment_limit(bitrate_bps: u64, duration_us: u64) -> Result<usize, PlayerErro
 fn elapsed_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
+
+#[cfg(test)]
+mod tests;

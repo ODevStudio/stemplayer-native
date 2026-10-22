@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::time::Duration;
 use stemplayer_domain::{ErrorCode, PlayerError};
 
@@ -10,6 +11,7 @@ pub struct UreqTransport {
 impl Default for UreqTransport {
     fn default() -> Self {
         let config = ureq::Agent::config_builder()
+            .proxy(None)
             .max_redirects(0)
             .max_response_header_size(32 * 1024)
             .timeout_global(Some(Duration::from_secs(15)))
@@ -77,8 +79,10 @@ fn map_error(error: ureq::Error, secure: bool) -> PlayerError {
             "HLS server returned an error status",
         ),
         ureq::Error::Timeout(_) => (ErrorCode::HlsGroupBufferingTimeout, "HLS request timed out"),
-        ureq::Error::Io(_) if secure => (ErrorCode::HlsTlsFailed, "HLS TLS connection failed"),
-        ureq::Error::Io(_) => (ErrorCode::HlsHttpFailed, "HLS connection failed"),
+        ureq::Error::Io(error) if !secure || is_socket_failure(error.kind()) => {
+            (ErrorCode::HlsHttpFailed, "HLS connection failed")
+        }
+        ureq::Error::Io(_) => (ErrorCode::HlsTlsFailed, "HLS TLS connection failed"),
         ureq::Error::Protocol(_) => (
             ErrorCode::HlsHttpFailed,
             "HLS server response was malformed",
@@ -86,4 +90,91 @@ fn map_error(error: ureq::Error, secure: bool) -> PlayerError {
         _ => (ErrorCode::HlsHttpFailed, "HLS request failed"),
     };
     PlayerError::new(code, summary).with_user_action("Check the network and retry the source")
+}
+
+fn is_socket_failure(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::ConnectionRefused
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::NotConnected
+            | ErrorKind::NetworkDown
+            | ErrorKind::NetworkUnreachable
+            | ErrorKind::HostUnreachable
+            | ErrorKind::BrokenPipe
+            | ErrorKind::UnexpectedEof
+            | ErrorKind::TimedOut
+            | ErrorKind::Interrupted
+            | ErrorKind::WouldBlock
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+    use std::process::Command;
+
+    #[test]
+    fn transport_has_no_proxy() {
+        assert!(UreqTransport::default().agent.config().proxy().is_none());
+    }
+
+    #[test]
+    fn ignores_ambient_proxy_credentials() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "http::tests::transport_has_no_proxy"])
+            .env("ALL_PROXY", "http://synthetic:dummy@127.0.0.1:9")
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    #[test]
+    fn socket_failures_remain_retryable_over_https() {
+        for secure in [false, true] {
+            for kind in [
+                ErrorKind::ConnectionRefused,
+                ErrorKind::ConnectionReset,
+                ErrorKind::ConnectionAborted,
+                ErrorKind::NotConnected,
+                ErrorKind::NetworkDown,
+                ErrorKind::NetworkUnreachable,
+                ErrorKind::HostUnreachable,
+                ErrorKind::BrokenPipe,
+                ErrorKind::UnexpectedEof,
+                ErrorKind::TimedOut,
+                ErrorKind::Interrupted,
+                ErrorKind::WouldBlock,
+            ] {
+                let error = map_error(ureq::Error::Io(io::Error::from(kind)), secure);
+                assert_eq!(error.code, ErrorCode::HlsHttpFailed, "{kind:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_tls_failures_including_wrapped_validation_errors() {
+        let errors = [
+            ureq::Error::Tls("synthetic TLS validation failure"),
+            ureq::Error::Io(io::Error::new(
+                ErrorKind::InvalidData,
+                ureq::Error::Tls("synthetic certificate failure"),
+            )),
+            ureq::Error::Io(io::Error::other(io::Error::new(
+                ErrorKind::InvalidData,
+                ureq::Error::Tls("synthetic wrapped certificate failure"),
+            ))),
+        ];
+        for error in errors {
+            assert_eq!(map_error(error, true).code, ErrorCode::HlsTlsFailed);
+        }
+    }
 }

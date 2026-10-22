@@ -1,21 +1,25 @@
 param(
     [string]$OutputPath = "artifacts/phase8/windows/resource-report.json",
+    [ValidateRange(6, 60)]
     [int]$Seconds = 6
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'qualification-helpers.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $output = Join-Path $root $OutputPath
 $profile = Join-Path $env:TEMP ("stemplayer-phase8-resource-" + [DateTime]::UtcNow.Ticks)
 $oldAppData = $env:APPDATA
 $oldLocalAppData = $env:LOCALAPPDATA
+$oldBackend = $env:SLINT_BACKEND
+$oldPerformance = $env:SLINT_DEBUG_PERFORMANCE
 $env:APPDATA = Join-Path $profile "roaming"
 $env:LOCALAPPDATA = Join-Path $profile "local"
 $env:SLINT_BACKEND = "winit-software"
 $env:SLINT_DEBUG_PERFORMANCE = "refresh_lazy,console"
 
 function Get-Percentile95([double[]]$Values) {
-    if ($Values.Count -eq 0) { return 0.0 }
+    if ($Values.Count -eq 0) { return $null }
     $sorted = @($Values | Sort-Object)
     $sorted[[Math]::Floor(($sorted.Count - 1) * 0.95)]
 }
@@ -27,6 +31,7 @@ function Measure-Scenario([string]$Name, [string]$Argument) {
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardError = $true
     $process = [Diagnostics.Process]::Start($startInfo)
+    $stderrTask = $process.StandardError.ReadToEndAsync()
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $previousCpu = [TimeSpan]::Zero
     $previousElapsed = 0.0
@@ -49,7 +54,7 @@ function Measure-Scenario([string]$Name, [string]$Argument) {
         }
     }
     $process.WaitForExit()
-    $stderr = $process.StandardError.ReadToEnd()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
     $steady = @($samples | Where-Object { $_.elapsed_ms -ge 1000 })
     $fps = @([regex]::Matches($stderr, "average frames per second: (\d+)") | ForEach-Object { [int]$_.Groups[1].Value })
     $steadyFps = @($fps | Select-Object -Skip 1)
@@ -58,8 +63,9 @@ function Measure-Scenario([string]$Name, [string]$Argument) {
         name = $Name
         exit_code = $process.ExitCode
         samples = @($samples)
+        evidence_complete = Test-ResourceEvidence $steady $steadyFps
         steady_max_private_bytes = ($steady | Measure-Object private_bytes -Maximum).Maximum
-        steady_cpu_percent_one_core_average = [Math]::Round(($steady | Measure-Object cpu_percent_one_core -Average).Average, 3)
+        steady_cpu_percent_one_core_average = if ($steady.Count) { [Math]::Round(($steady | Measure-Object cpu_percent_one_core -Average).Average, 3) } else { $null }
         steady_cpu_percent_one_core_p95 = Get-Percentile95 @($steady | ForEach-Object { [double]$_.cpu_percent_one_core })
         reported_frames_per_second = $fps
         reported_frames_per_second_max = ($steadyFps | Measure-Object -Maximum).Maximum
@@ -71,6 +77,7 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $output), $env:APP
 Push-Location $root
 try {
     cargo build --release --locked -p stemplayer --no-default-features --features development
+    if ($LASTEXITCODE -ne 0) { throw "Development player build failed" }
     $binary = Join-Path $root "target/release/stemplayer.exe"
     $scenarios = @(
         Measure-Scenario "ready-idle" "--ui-idle"
@@ -86,7 +93,7 @@ try {
     $playingMinimized = $scenarios | Where-Object { $_.name -eq "playing-minimized" }
     $pausedMinimized = $scenarios | Where-Object { $_.name -eq "paused-minimized" }
     $nativeTree = @($scenarios.child_processes | Where-Object { $_ -match "(?i)(chrome|edge|webview|node|electron)" }).Count -eq 0
-    $passed = @($scenarios | Where-Object { $_.exit_code -ne 0 }).Count -eq 0 -and
+    $passed = @($scenarios | Where-Object { $_.exit_code -ne 0 -or -not $_.evidence_complete }).Count -eq 0 -and
         $idle.steady_max_private_bytes -le 52428800 -and
         $idle.steady_cpu_percent_one_core_p95 -le 1.0 -and
         $playing.steady_cpu_percent_one_core_average -le 1.5 -and
@@ -132,5 +139,7 @@ try {
     Pop-Location
     $env:APPDATA = $oldAppData
     $env:LOCALAPPDATA = $oldLocalAppData
+    $env:SLINT_BACKEND = $oldBackend
+    $env:SLINT_DEBUG_PERFORMANCE = $oldPerformance
     Remove-Item -Recurse -Force -LiteralPath $profile -ErrorAction SilentlyContinue
 }

@@ -3,7 +3,7 @@ param(
     [string]$NvdaPath,
     [string]$OutputDirectory = "artifacts/phase0/windows-nvda",
     [string]$BinaryPath = "target/release/stemplayer-phase0-probe.exe",
-    [string]$CargoArguments = "--release --locked",
+    [string]$CargoArguments = "--release --locked -p stemplayer-phase0-probe",
     [string]$UiArguments = "--ui-smoke 120",
     [string[]]$Required = @("Drums gain", "Bass gain", "Other gain", "Vocals gain", "Play", "Stop")
 )
@@ -42,6 +42,7 @@ Push-Location $root
 $probe = $null
 try {
     cargo build @($CargoArguments -split " ")
+    if ($LASTEXITCODE -ne 0) { throw "Qualification build failed" }
     $nvdaArguments = @(
         "--minimal",
         "--disable-addons",

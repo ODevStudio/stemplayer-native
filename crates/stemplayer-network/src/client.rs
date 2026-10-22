@@ -112,11 +112,13 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), PlayerError> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicUsize;
 
-    struct MemoryTransport(BTreeMap<String, Vec<u8>>);
+    struct MemoryTransport(BTreeMap<String, Vec<u8>>, AtomicUsize);
 
     impl HttpTransport for MemoryTransport {
         fn get(&self, url: &url::Url, maximum_bytes: usize) -> Result<HttpResponse, PlayerError> {
+            self.1.fetch_add(1, Ordering::Relaxed);
             let bytes =
                 self.0.get(url.as_str()).cloned().ok_or_else(|| {
                     PlayerError::new(ErrorCode::HlsHttpFailed, "missing response")
@@ -179,7 +181,7 @@ mod tests {
             responses.insert(format!("{base}{role}.m3u8"), playlist.clone());
             responses.insert(format!("{base}{role}.waveform.json"), waveform.clone());
         }
-        MemoryTransport(responses)
+        MemoryTransport(responses, AtomicUsize::new(0))
     }
 
     #[test]
@@ -199,6 +201,51 @@ mod tests {
             source.diagnostics().source,
             "https://example.test/2 path component(s)"
         );
+    }
+
+    #[test]
+    fn rejects_unsafe_entry_urls_without_fetching() {
+        for url in [
+            "http://example.test/stemset.json",
+            "file:///stemset.json",
+            "https://user:dummy@example.test/stemset.json",
+            "https://example.test/stemset.json?token=dummy",
+            "https://example.test/stemset.json#fragment",
+        ] {
+            let transport = Arc::new(responses(|_| {}));
+            let client = HlsClient::new(transport.clone(), false);
+            let error = client.open(url, &AtomicBool::new(false)).err().unwrap();
+            assert_eq!(error.code, ErrorCode::HlsUrlUnsafe, "{url}");
+            assert_eq!(transport.1.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn rejects_padded_manifest_references_before_fetching_children() {
+        for role in ["drums", "bass", "other", "vocals", "master"] {
+            for field in ["playlist", "waveform"] {
+                for reference in [" /private.m3u8", " ../private.m3u8", "a/.. ", "track "] {
+                    let transport = Arc::new(responses(|manifest| {
+                        let route = if role == "master" {
+                            &mut manifest["master"]
+                        } else {
+                            &mut manifest["stems"][role]
+                        };
+                        route[field] = reference.into();
+                    }));
+                    let client = HlsClient::new(transport.clone(), false);
+                    let error = client
+                        .open(
+                            "https://example.test/media/stemset.json",
+                            &AtomicBool::new(false),
+                        )
+                        .err()
+                        .unwrap();
+                    assert_eq!(error.code, ErrorCode::HlsUrlUnsafe, "{role}/{field}");
+                    assert_eq!(transport.1.load(Ordering::Relaxed), 1);
+                }
+            }
+        }
     }
 
     #[test]

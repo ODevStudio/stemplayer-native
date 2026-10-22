@@ -1,7 +1,9 @@
 use crate::BoundedReader;
+use crate::mp4_descriptors::validate_sample_description;
 use crate::mp4_metadata::{
     MAX_METADATA_BYTES, parse_native_roles, read_handler, read_metadata, read_track_name,
 };
+use crate::mp4_reader::Mp4Reader;
 use crate::mp4_tables::{
     Mp4PacketIndex, Mp4TableBuilder, read_chunk_offsets, read_sample_sizes, read_sample_to_chunk,
     read_timing,
@@ -17,6 +19,7 @@ const MAX_TRACKS: usize = 16;
 const MAX_FTYP_BYTES: usize = 4096;
 const MAX_EDITS: usize = 100_000;
 const MAX_PACKET_TABLE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SAMPLE_DESCRIPTION_BYTES: u64 = 64 * 1024 + 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct Mp4Edit {
@@ -57,12 +60,46 @@ pub fn inspect_mp4_structure(
     mut reader: BoundedReader,
     cancelled: &AtomicBool,
 ) -> Result<Mp4Structure, PlayerError> {
-    let file_bytes = reader.identity().len();
+    inspect_mp4(&mut Mp4Reader::File(&mut reader), cancelled)
+}
+
+pub fn validate_mp4_for_demux(
+    reader: &mut BoundedReader,
+    cancelled: &AtomicBool,
+) -> Result<(), PlayerError> {
+    inspect_mp4(&mut Mp4Reader::File(reader), cancelled).map(|_| ())
+}
+
+pub fn validate_mp4_bytes_for_demux(
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+) -> Result<(), PlayerError> {
+    inspect_mp4_bytes(bytes, cancelled).map(|_| ())
+}
+
+pub fn inspect_mp4_bytes(
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+) -> Result<Mp4Structure, PlayerError> {
+    inspect_mp4(
+        &mut Mp4Reader::Bytes {
+            bytes,
+            bytes_read: 0,
+        },
+        cancelled,
+    )
+}
+
+fn inspect_mp4(
+    reader: &mut Mp4Reader<'_>,
+    cancelled: &AtomicBool,
+) -> Result<Mp4Structure, PlayerError> {
+    let file_bytes = reader.len();
     if !(8..=MAX_MP4_BYTES).contains(&file_bytes) {
         return Err(malformed("MP4 file size is outside the supported limit"));
     }
     let mut state = ScanState::default();
-    scan_boxes(&mut reader, cancelled, 0, file_bytes, 0, &mut state, None)?;
+    scan_boxes(reader, cancelled, 0, file_bytes, 0, &mut state, None)?;
     let metadata_bytes_read = reader.bytes_read();
     let (major_brand, compatible_brands) = state
         .file_type
@@ -115,10 +152,11 @@ struct TrackBuilder {
     edits: Vec<Mp4Edit>,
     tables: Mp4TableBuilder,
     name: Option<String>,
+    has_sample_description: bool,
 }
 
 fn scan_boxes(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     mut offset: u64,
     end: u64,
@@ -203,7 +241,7 @@ fn scan_boxes(
                     state,
                     Some(&mut builder),
                 )?;
-                let structure = builder.finish(reader.identity().len())?;
+                let structure = builder.finish(reader.len())?;
                 state.packet_table_bytes = state
                     .packet_table_bytes
                     .checked_add(
@@ -230,6 +268,29 @@ fn scan_boxes(
                     state,
                     track.as_deref_mut(),
                 )?;
+            }
+            b"moof" | b"mvex" => {
+                return Err(malformed("Fragmented MP4 is outside the supported profile"));
+            }
+            b"meta" => {
+                add_metadata_bytes(state, box_end - body)?;
+            }
+            b"stsd" if track.is_some() => {
+                if box_end - body > MAX_SAMPLE_DESCRIPTION_BYTES {
+                    return Err(malformed(
+                        "MP4 sample description exceeds the supported size",
+                    ));
+                }
+                let track = track.as_deref_mut().unwrap();
+                if track.has_sample_description {
+                    return Err(malformed("MP4 track contains multiple sample descriptions"));
+                }
+                let mut bytes = vec![0_u8; (box_end - body) as usize];
+                for (index, chunk) in bytes.chunks_mut(64 * 1024).enumerate() {
+                    reader.read_exact_at(body + (index * 64 * 1024) as u64, chunk, cancelled)?;
+                }
+                validate_sample_description(&bytes)?;
+                track.has_sample_description = true;
             }
             b"tkhd" if track.is_some() => {
                 let (track_id, enabled) = read_track_header(reader, cancelled, body, box_end)?;
@@ -312,17 +373,12 @@ fn scan_boxes(
                         "MP4 contains multiple Native Instruments metadata boxes",
                     ));
                 }
+                add_metadata_bytes(state, box_end - body)?;
                 let bytes = read_metadata(reader, cancelled, body, box_end)?;
-                state.metadata_bytes = state
-                    .metadata_bytes
-                    .checked_add(bytes.len())
-                    .ok_or_else(|| malformed("MP4 metadata byte count overflowed"))?;
-                if state.metadata_bytes > MAX_METADATA_BYTES {
-                    return Err(malformed("MP4 metadata exceeds the supported size"));
-                }
                 state.native_roles = Some(parse_native_roles(&bytes)?);
             }
             b"name" if track.is_some() => {
+                add_metadata_bytes(state, box_end - body)?;
                 let value = read_track_name(reader, cancelled, body, box_end)?;
                 if track.as_deref_mut().unwrap().name.replace(value).is_some() {
                     return Err(malformed("MP4 track contains multiple names"));
@@ -335,6 +391,15 @@ fn scan_boxes(
     Ok(())
 }
 
+fn add_metadata_bytes(state: &mut ScanState, bytes: u64) -> Result<(), PlayerError> {
+    state.metadata_bytes = usize::try_from(bytes)
+        .ok()
+        .and_then(|bytes| state.metadata_bytes.checked_add(bytes))
+        .filter(|bytes| *bytes <= MAX_METADATA_BYTES)
+        .ok_or_else(|| malformed("MP4 metadata exceeds the supported size"))?;
+    Ok(())
+}
+
 impl TrackBuilder {
     fn finish(self, file_bytes: u64) -> Result<Mp4TrackStructure, PlayerError> {
         let track_id = self
@@ -342,37 +407,30 @@ impl TrackBuilder {
             .filter(|value| *value > 0)
             .ok_or_else(|| malformed("MP4 track has no track header"))?;
         let is_audio = self.handler == Some(*b"soun");
-        if is_audio && self.media_timescale.is_none_or(|value| value == 0) {
-            return Err(malformed("MP4 audio track has incomplete media tables"));
+        if self.media_timescale.is_none_or(|value| value == 0) {
+            return Err(malformed("MP4 track has incomplete media tables"));
         }
-        let packet_index = is_audio
-            .then(|| self.tables.finish(file_bytes))
-            .transpose()?;
-        if packet_index
-            .as_ref()
-            .is_some_and(|index| Some(index.duration) != self.media_duration)
-        {
+        let packet_index = self.tables.finish(file_bytes)?;
+        if Some(packet_index.duration) != self.media_duration {
             return Err(malformed("MP4 media duration and sample timing disagree"));
         }
-        let sample_count = packet_index.as_ref().map(|index| index.sample_count);
-        let encoded_bytes = packet_index.as_ref().map(|index| index.encoded_bytes);
         Ok(Mp4TrackStructure {
             track_id,
             enabled: self.enabled,
             is_audio,
             media_timescale: self.media_timescale,
             media_duration: self.media_duration,
-            sample_count,
-            encoded_bytes,
+            sample_count: Some(packet_index.sample_count),
+            encoded_bytes: Some(packet_index.encoded_bytes),
             edits: self.edits,
-            packet_index,
+            packet_index: Some(packet_index),
             name: self.name.or(self.handler_name),
         })
     }
 }
 
 fn read_track_header(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -406,7 +464,7 @@ fn read_track_header(
 }
 
 fn read_timescale(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -434,7 +492,7 @@ fn read_timescale(
 }
 
 fn read_edits(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -487,7 +545,7 @@ fn read_edits(
 }
 
 fn read_array<const N: usize>(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     offset: u64,
     end: u64,
@@ -502,7 +560,7 @@ fn read_array<const N: usize>(
 }
 
 fn read_file_type(
-    reader: &mut BoundedReader,
+    reader: &mut Mp4Reader<'_>,
     cancelled: &AtomicBool,
     body: u64,
     end: u64,
@@ -543,236 +601,5 @@ fn malformed(summary: &str) -> PlayerError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::AtomicBool;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn bounded_structure_accepts_valid_boxes_and_rejects_bad_ranges() {
-        let valid = [
-            atom(*b"ftyp", b"M4A \0\0\0\0isomM4A "),
-            atom(
-                *b"moov",
-                &[
-                    movie_header(1_000),
-                    audio_track(),
-                    atom(
-                        *b"udta",
-                        &atom(
-                            *b"stem",
-                            br#"{"stems":[{"name":"Drums"},{"name":"Bass"},{"name":"Other"},{"name":"Vocals"}]}"#,
-                        ),
-                    ),
-                ]
-                .concat(),
-            ),
-        ]
-        .concat();
-        let structure = inspect(&valid).unwrap();
-        assert_eq!(structure.major_brand, "M4A ");
-        assert_eq!(structure.compatible_brands, ["isom", "M4A "]);
-        assert_eq!(structure.track_count, 1);
-        assert_eq!(structure.movie_timescale, 1_000);
-        assert_eq!(structure.tracks[0].track_id, 7);
-        assert!(structure.tracks[0].enabled && structure.tracks[0].is_audio);
-        assert_eq!(structure.tracks[0].media_timescale, Some(48_000));
-        assert_eq!(structure.tracks[0].media_duration, Some(144_000));
-        assert_eq!(structure.tracks[0].name.as_deref(), Some("Drums"));
-        assert_eq!(
-            structure
-                .native_roles
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["Drums", "Bass", "Other", "Vocals"]
-        );
-        assert_eq!(structure.tracks[0].sample_count, Some(3));
-        assert_eq!(structure.tracks[0].encoded_bytes, Some(60));
-        let index = structure.tracks[0].packet_index.as_ref().unwrap();
-        assert_eq!(index.packet_range(0).unwrap(), (0, 10));
-        assert_eq!(index.packet_range(1).unwrap(), (10, 20));
-        assert_eq!(index.packet_range(2).unwrap(), (30, 30));
-        assert_eq!(index.sample_at_or_before(96_000), 2);
-        assert_eq!(
-            structure.tracks[0].edits,
-            [Mp4Edit {
-                segment_duration: 3_000,
-                media_time: 1_024,
-                media_rate_integer: 1,
-                media_rate_fraction: 0,
-            }]
-        );
-
-        let mut truncated = atom(*b"moov", &[]);
-        truncated[..4].copy_from_slice(&64_u32.to_be_bytes());
-        assert_eq!(
-            inspect(&truncated).unwrap_err().code,
-            ErrorCode::ContainerMalformed
-        );
-        assert_eq!(
-            inspect(&atom(*b"free", &[])).unwrap_err().code,
-            ErrorCode::ContainerNotMp4
-        );
-    }
-
-    #[test]
-    fn version_one_times_and_invalid_sample_tables_are_checked() {
-        let valid = [
-            atom(*b"ftyp", b"M4A \0\0\0\0isom"),
-            atom(
-                *b"moov",
-                &[movie_header_v1(2_000, 12_000), audio_track()].concat(),
-            ),
-        ]
-        .concat();
-        assert_eq!(inspect(&valid).unwrap().movie_timescale, 2_000);
-
-        let mut invalid = vec![0_u8; 12];
-        invalid[8..12].copy_from_slice(&1_000_001_u32.to_be_bytes());
-        let file = [
-            atom(*b"ftyp", b"M4A \0\0\0\0isom"),
-            atom(
-                *b"moov",
-                &[
-                    movie_header(1_000),
-                    track_with_sample_sizes(atom(*b"stsz", &invalid)),
-                ]
-                .concat(),
-            ),
-        ]
-        .concat();
-        assert_eq!(
-            inspect(&file).unwrap_err().code,
-            ErrorCode::ContainerMalformed
-        );
-    }
-
-    fn inspect(bytes: &[u8]) -> Result<Mp4Structure, PlayerError> {
-        let path = temporary_path();
-        fs::write(&path, bytes).unwrap();
-        let result =
-            inspect_mp4_structure(BoundedReader::open(&path).unwrap(), &AtomicBool::new(false));
-        fs::remove_file(path).unwrap();
-        result
-    }
-
-    fn atom(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(8 + body.len());
-        bytes.extend_from_slice(&(8_u32 + u32::try_from(body.len()).unwrap()).to_be_bytes());
-        bytes.extend_from_slice(&kind);
-        bytes.extend_from_slice(body);
-        bytes
-    }
-
-    fn movie_header(timescale: u32) -> Vec<u8> {
-        let mut body = vec![0_u8; 20];
-        body[12..16].copy_from_slice(&timescale.to_be_bytes());
-        body[16..20].copy_from_slice(&3_000_u32.to_be_bytes());
-        atom(*b"mvhd", &body)
-    }
-
-    fn movie_header_v1(timescale: u32, duration: u64) -> Vec<u8> {
-        let mut body = vec![0_u8; 32];
-        body[0] = 1;
-        body[20..24].copy_from_slice(&timescale.to_be_bytes());
-        body[24..32].copy_from_slice(&duration.to_be_bytes());
-        atom(*b"mvhd", &body)
-    }
-
-    fn audio_track() -> Vec<u8> {
-        let mut sizes = vec![0_u8; 12];
-        sizes[8..12].copy_from_slice(&3_u32.to_be_bytes());
-        for size in [10_u32, 20, 30] {
-            sizes.extend_from_slice(&size.to_be_bytes());
-        }
-        track_with_sample_sizes(atom(*b"stsz", &sizes))
-    }
-
-    fn track_with_sample_sizes(sample_sizes: Vec<u8>) -> Vec<u8> {
-        let mut track_header = vec![0_u8; 24];
-        track_header[3] = 1;
-        track_header[12..16].copy_from_slice(&7_u32.to_be_bytes());
-
-        let mut media_header = vec![0_u8; 20];
-        media_header[12..16].copy_from_slice(&48_000_u32.to_be_bytes());
-        media_header[16..20].copy_from_slice(&144_000_u32.to_be_bytes());
-
-        let mut handler = vec![0_u8; 24];
-        handler[8..12].copy_from_slice(b"soun");
-
-        let mut edit = vec![0_u8; 20];
-        edit[4..8].copy_from_slice(&1_u32.to_be_bytes());
-        edit[8..12].copy_from_slice(&3_000_u32.to_be_bytes());
-        edit[12..16].copy_from_slice(&1_024_i32.to_be_bytes());
-        edit[16..18].copy_from_slice(&1_i16.to_be_bytes());
-
-        let mut chunk_offsets = vec![0_u8; 8];
-        chunk_offsets[4..8].copy_from_slice(&1_u32.to_be_bytes());
-        chunk_offsets.extend_from_slice(&0_u32.to_be_bytes());
-
-        let mut sample_to_chunk = vec![0_u8; 8];
-        sample_to_chunk[4..8].copy_from_slice(&1_u32.to_be_bytes());
-        sample_to_chunk.extend_from_slice(&1_u32.to_be_bytes());
-        sample_to_chunk.extend_from_slice(&3_u32.to_be_bytes());
-        sample_to_chunk.extend_from_slice(&1_u32.to_be_bytes());
-
-        let mut timing = vec![0_u8; 8];
-        timing[4..8].copy_from_slice(&1_u32.to_be_bytes());
-        timing.extend_from_slice(&3_u32.to_be_bytes());
-        timing.extend_from_slice(&48_000_u32.to_be_bytes());
-
-        let sample_table = [
-            sample_sizes,
-            atom(*b"stco", &chunk_offsets),
-            atom(*b"stsc", &sample_to_chunk),
-            atom(*b"stts", &timing),
-        ]
-        .concat();
-
-        atom(
-            *b"trak",
-            &[
-                atom(*b"tkhd", &track_header),
-                atom(*b"name", b"Drums"),
-                atom(*b"edts", &atom(*b"elst", &edit)),
-                atom(
-                    *b"mdia",
-                    &[
-                        atom(*b"mdhd", &media_header),
-                        atom(*b"hdlr", &handler),
-                        atom(*b"minf", &atom(*b"stbl", &sample_table)),
-                    ]
-                    .concat(),
-                ),
-            ]
-            .concat(),
-        )
-    }
-
-    fn temporary_path() -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("stemplayer-mp4-{}-{nonce}.mp4", std::process::id()))
-    }
-
-    #[test]
-    #[ignore = "requires STEMPLAYER_NATIVE_CONTAINER_FIXTURE"]
-    fn local_container_structure_is_bounded_and_content_identified() {
-        let path = std::env::var("STEMPLAYER_NATIVE_CONTAINER_FIXTURE").unwrap();
-        let structure = inspect_mp4_structure(
-            BoundedReader::open(std::path::Path::new(&path)).unwrap(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-        assert!(matches!(structure.track_count, 4 | 5));
-        assert!(!structure.major_brand.is_empty());
-        assert!(structure.box_count > structure.track_count);
-    }
-}
+#[path = "mp4_tests.rs"]
+mod tests;

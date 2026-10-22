@@ -42,6 +42,12 @@ impl PostMixResampler {
                 "Resampler rates and chunk size must be positive",
             ));
         }
+        if maximum_input_frames > MAXIMUM_BUFFER_FRAMES {
+            return Err(PlayerError::new(
+                ErrorCode::ValueOutOfRange,
+                "Resampler input chunk exceeds the bounded buffer size",
+            ));
+        }
         if !(MINIMUM_SAMPLE_RATE..=MAXIMUM_SAMPLE_RATE).contains(&input_rate)
             || !(MINIMUM_SAMPLE_RATE..=MAXIMUM_SAMPLE_RATE).contains(&output_rate)
         {
@@ -116,6 +122,12 @@ impl PostMixResampler {
         frames: &[StereoFrame],
         end_of_input: bool,
     ) -> Result<&[StereoFrame], PlayerError> {
+        if self.input_ended && !frames.is_empty() {
+            return Err(PlayerError::new(
+                ErrorCode::ValueOutOfRange,
+                "Resampler input has already ended",
+            ));
+        }
         if self.finished() {
             return Ok(&[]);
         }
@@ -123,6 +135,12 @@ impl PostMixResampler {
             return Err(PlayerError::new(
                 ErrorCode::ValueOutOfRange,
                 "Resampler input exceeds its fixed chunk size",
+            ));
+        }
+        if frames.len() < self.input_frames_next() && !end_of_input {
+            return Err(PlayerError::new(
+                ErrorCode::PlaybackNotReady,
+                "Resampler requires a complete input chunk before the final block",
             ));
         }
         self.input_ended |= end_of_input;
@@ -137,7 +155,6 @@ impl PostMixResampler {
                 Ok(&self.frames[..available])
             }
             ResamplerKind::Fft(resampler) => {
-                self.input.fill(0.0);
                 for (target, source) in self.input.chunks_exact_mut(2).zip(frames) {
                     target[0] = source.left;
                     target[1] = source.right;
@@ -309,5 +326,54 @@ mod tests {
         assert!(PostMixResampler::new(1, 48_000, 2_048, 1).is_err());
         assert!(PostMixResampler::new(384_001, 48_000, 2_048, 1).is_err());
         assert!(PostMixResampler::new(48_000, 384_001, 2_048, 1).is_err());
+        assert!(PostMixResampler::new(48_000, 48_000, 65_537, 1).is_err());
+    }
+
+    #[test]
+    fn non_final_partial_input_is_rejected_without_advancing() {
+        for output_rate in [44_100, 48_000] {
+            let mut resampler = PostMixResampler::new(44_100, output_rate, 2_048, 4_096).unwrap();
+            let before = resampler.snapshot();
+            let partial = [StereoFrame::default(); 1_000];
+            let error = resampler.process(&partial, false).unwrap_err();
+            assert_eq!(error.code, ErrorCode::PlaybackNotReady);
+            assert_eq!(resampler.snapshot(), before);
+            assert!(!resampler.finished());
+            assert!(resampler.process(&[], false).is_err());
+        }
+    }
+
+    #[test]
+    fn rejected_partial_input_does_not_change_later_pcm() {
+        let input = vec![
+            StereoFrame {
+                left: 0.25,
+                right: -0.25,
+            };
+            4_096
+        ];
+        let expected = convert(44_100, 48_000, &input);
+        let mut resampler = PostMixResampler::new(44_100, 48_000, 2_048, 4_096).unwrap();
+        assert!(resampler.process(&input[..1_000], false).is_err());
+        let first = resampler.process(&input[..2_048], false).unwrap().to_vec();
+        let second = resampler.process(&input[2_048..], true).unwrap().to_vec();
+        let mut output = [first, second].concat();
+        while !resampler.finished() {
+            output.extend_from_slice(resampler.process(&[], true).unwrap());
+        }
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn final_input_cannot_be_extended_while_draining_or_after_completion() {
+        let mut resampler = PostMixResampler::new(44_100, 48_000, 2_048, 1_000).unwrap();
+        resampler
+            .process(&[StereoFrame::default(); 1_000], true)
+            .unwrap();
+        assert!(resampler.process(&[StereoFrame::default()], true).is_err());
+        while !resampler.finished() {
+            resampler.process(&[], true).unwrap();
+        }
+        assert!(resampler.process(&[StereoFrame::default()], true).is_err());
     }
 }

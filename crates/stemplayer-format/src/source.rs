@@ -1,36 +1,16 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
 use stemplayer_domain::{ErrorCode, PlayerError};
 use unicode_normalization::UnicodeNormalization;
 
+mod identity;
+mod local_file;
+
+pub use identity::FileIdentity;
+
 pub const MAX_RANGE_BYTES: usize = 64 * 1024;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileIdentity {
-    len: u64,
-    modified: Option<SystemTime>,
-}
-
-impl FileIdentity {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            len: metadata.len(),
-            modified: metadata.modified().ok(),
-        }
-    }
-
-    pub const fn len(&self) -> u64 {
-        self.len
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-}
 
 pub struct SelectedFile {
     basename: String,
@@ -155,26 +135,14 @@ impl SourceGroup {
 }
 
 pub struct BoundedReader {
-    file: File,
     identity: FileIdentity,
     bytes_read: u64,
 }
 
 impl BoundedReader {
     pub fn open(path: &Path) -> Result<Self, PlayerError> {
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|error| io_error("Bundle file metadata is unavailable", error))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(source_error(
-                ErrorCode::ManifestPathUnsafe,
-                "Referenced bundle entry is not a regular file",
-            ));
-        }
-        let file =
-            File::open(path).map_err(|error| io_error("Bundle file cannot be opened", error))?;
         Ok(Self {
-            file,
-            identity: FileIdentity::from_metadata(&metadata),
+            identity: FileIdentity::open_reader(path)?,
             bytes_read: 0,
         })
     }
@@ -208,16 +176,16 @@ impl BoundedReader {
         let end = offset
             .checked_add(buffer.len() as u64)
             .ok_or_else(|| source_error(ErrorCode::WavMalformed, "Source range overflowed"))?;
-        if end > self.identity.len {
+        if end > self.identity.len() {
             return Err(source_error(
                 ErrorCode::WavDataTruncated,
                 "Source range is truncated",
             ));
         }
         self.ensure_unchanged()?;
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .and_then(|_| self.file.read_exact(buffer))
+        let mut file = self.identity.file();
+        file.seek(SeekFrom::Start(offset))
+            .and_then(|_| file.read_exact(buffer))
             .map_err(|error| io_error("Bundle range cannot be read", error))?;
         self.bytes_read = self.bytes_read.saturating_add(buffer.len() as u64);
         self.ensure_unchanged()
@@ -234,17 +202,7 @@ impl BoundedReader {
     }
 
     fn ensure_unchanged(&self) -> Result<(), PlayerError> {
-        let metadata = self
-            .file
-            .metadata()
-            .map_err(|error| io_error("Bundle file metadata is unavailable", error))?;
-        if FileIdentity::from_metadata(&metadata) != self.identity {
-            return Err(source_error(
-                ErrorCode::BundleInconsistent,
-                "A bundle file changed during access",
-            ));
-        }
-        Ok(())
+        self.identity.ensure_unchanged()
     }
 }
 

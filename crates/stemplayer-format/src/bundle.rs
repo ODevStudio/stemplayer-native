@@ -1,6 +1,6 @@
-use crate::hashing::{HashProgress, verify_sha256};
+use crate::hashing::{HashProgress, verify_sha256_with_identity};
 use crate::manifest::{ManifestTrack, StudioManifest, parse_manifest};
-use crate::source::{BoundedReader, SourceGroup, normalized_key, source_error};
+use crate::source::{BoundedReader, MAX_RANGE_BYTES, SourceGroup, normalized_key, source_error};
 use crate::wav::{SampleEncoding, WaveInfo, inspect_wave};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -117,7 +117,14 @@ impl StudioBundle {
                     ));
                 }
                 let mut manifest_bytes = vec![0_u8; manifest_reader.identity().len() as usize];
-                manifest_reader.read_exact_at(0, &mut manifest_bytes, cancelled)?;
+                for offset in (0..manifest_bytes.len().max(1)).step_by(MAX_RANGE_BYTES) {
+                    let end = (offset + MAX_RANGE_BYTES).min(manifest_bytes.len());
+                    manifest_reader.read_exact_at(
+                        offset as u64,
+                        &mut manifest_bytes[offset..end],
+                        cancelled,
+                    )?;
+                }
                 let manifest = parse_manifest(&manifest_bytes)?;
                 (manifest, manifest_reader.bytes_read())
             }
@@ -143,8 +150,9 @@ impl StudioBundle {
                 (None, _) => HashStatus::Absent,
                 (Some(_), false) => HashStatus::Declared,
                 (Some(hash), true) => {
-                    bytes_read = bytes_read.saturating_add(verify_sha256(
+                    bytes_read = bytes_read.saturating_add(verify_sha256_with_identity(
                         group.reader(&declared.filename)?,
+                        &info.identity,
                         hash,
                         file_index,
                         cancelled,
@@ -192,6 +200,12 @@ impl StudioBundle {
             .iter()
             .map(|field| format!("Unknown top-level field ignored: {field}"))
             .collect();
+        let maximum_open_files = tracks.len() as u8
+            + u8::from(
+                reports
+                    .last()
+                    .is_some_and(|track| track.hash_status == HashStatus::Verified),
+            );
         let report = StudioBundleReport {
             schema: "stemplayer-studio-bundle-v1",
             schema_version: manifest.schema_version,
@@ -204,7 +218,7 @@ impl StudioBundle {
             ignored_outputs: manifest.ignored_outputs,
             warnings,
             bytes_read: total_bytes_read,
-            maximum_open_files: 1,
+            maximum_open_files,
             peak_pending_blocks: 1,
         };
         Ok(Self {

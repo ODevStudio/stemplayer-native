@@ -49,6 +49,32 @@ function New-TestBuildInfo {
     }
 }
 
+& {
+    function Invoke-PreviewCommand {
+        param([string]$Command, [string[]]$Arguments)
+
+        if ($Command -cne 'git') { throw 'Unexpected source-check command' }
+        switch -CaseSensitive ($Arguments -join ' ') {
+            'status --porcelain --untracked-files=normal' { $source.status }
+            'rev-parse HEAD' { $source.revision }
+            default { throw 'Unexpected source-check arguments' }
+        }
+    }
+
+    $capturedRevision = '1' * 40
+    foreach ($source in @(
+        @{ revision = $capturedRevision; status = ''; failure = $null },
+        @{ revision = ('2' * 40); status = ''; failure = 'Source revision changed' },
+        @{ revision = $capturedRevision; status = ' M synthetic.rs'; failure = 'Source checkout changed' }
+    )) {
+        if ($source.failure) {
+            Assert-Failure { Assert-PreviewSourceUnchanged $capturedRevision } $source.failure
+        } else {
+            Assert-PreviewSourceUnchanged $capturedRevision
+        }
+    }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $testRoot = Join-Path $root ('artifacts/preview-tests-' + [Guid]::NewGuid().ToString('N'))
 $name = 'stemplayer-native-0.1.0-preview.1-windows-x86_64'
