@@ -4,5 +4,6 @@ Only concise, redacted summaries belong here. Raw reports, screenshots, private 
 
 - [Windows preview packaging verification](windows-preview-packaging.md)
 - [Windows preview dependency security refresh](windows-preview-security-refresh.md)
+- [Windows preview audit continuation](windows-preview-audit-continuation.md)
 
 The current native qualification record is summarized in [STATUS.md](../../STATUS.md) and the format-specific evidence is linked from the relevant documents under `docs/formats/`.

@@ -85,7 +85,9 @@ foreach ($file in Get-PreviewFiles) {
     [IO.File]::WriteAllText((Join-Path $payload $file), 'synthetic packaging input, not executable media')
 }
 $noticesPath = Join-Path $payload 'THIRD-PARTY-NOTICES.txt'
-$notices = 'Slint Royalty-free Desktop, Mobile, and Web Applications License; MPL-2.0; Mozilla Public License'
+$notices = 'Slint Royalty-free Desktop, Mobile, and Web Applications License; MPL-2.0; Mozilla Public License' +
+    "`nModified symphonia-codec-aac 0.6.0 (MPL-2.0)`nFull modified source: https://github.com/ODevStudio/stemplayer-native/tree/" +
+    ('1' * 40) + '/vendor/symphonia-codec-aac'
 [IO.File]::WriteAllText($noticesPath, $notices)
 $binaryHash = (Get-FileHash -LiteralPath (Join-Path $payload 'stemplayer.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
 $info = New-TestBuildInfo
@@ -117,6 +119,7 @@ foreach ($change in @(
     @{ version = '0.1.0' },
     @{ version = '../escape-preview.1' },
     @{ source_commit = 'not-a-commit' },
+    @{ source_commit = ('3' * 40) },
     @{ source_dirty = $true },
     @{ target = 'aarch64-pc-windows-msvc' },
     @{ signed = $true },
@@ -133,7 +136,23 @@ Assert-Failure { Assert-PreviewPayload $payload } 'SBOM'
 Write-TestJson $bomPath $bom
 [IO.File]::WriteAllText($noticesPath, 'incomplete license notice')
 Assert-Failure { Assert-PreviewPayload $payload } 'license text'
+[IO.File]::WriteAllText($noticesPath, $notices + "`nCopyright (c) <year> <copyright holders>")
+Assert-Failure { Assert-PreviewPayload $payload } 'copyright/attribution'
 [IO.File]::WriteAllText($noticesPath, $notices)
+$aacMetadata = [pscustomobject]@{
+    workspace_root = $root
+    packages = @([pscustomobject]@{
+        name = 'symphonia-codec-aac'
+        version = '0.6.0'
+        source = $null
+        manifest_path = (Join-Path $root 'vendor/symphonia-codec-aac/Cargo.toml')
+    })
+}
+$aacNoticePath = Join-Path $testRoot 'modified-aac-notice.txt'
+Add-PreviewAacNotice $aacMetadata $aacNoticePath ('1' * 40)
+Assert-Check ([IO.File]::ReadAllText($aacNoticePath).Contains('Full modified source: https://github.com/ODevStudio/stemplayer-native/tree/' + ('1' * 40))) 'Modified AAC source URL missing'
+Assert-Failure { Add-PreviewAacNotice $aacMetadata $aacNoticePath 'invalid' } 'source provenance'
+Assert-Failure { Add-PreviewAacNotice ([pscustomobject]@{ workspace_root = $root; packages = @() }) $aacNoticePath ('1' * 40) } 'source provenance'
 Assert-Failure { Add-PreviewSlintLicense ([pscustomobject]@{ packages = @() }) $noticesPath } 'Slint license clarification'
 $slintRoot = Join-Path $testRoot 'slint'
 [IO.Directory]::CreateDirectory((Join-Path $slintRoot 'LICENSES')) | Out-Null
@@ -147,15 +166,20 @@ Assert-Failure { Assert-PreviewSystemLibraries @('browser-helper.dll') } 'Unappr
 Assert-Failure { Assert-PreviewSystemLibraries @() } 'Unapproved Windows imports'
 
 $packageId = 'path+file:///private-build/apps/stemplayer#0.1.0-preview.1'
+$vendorId = 'path+file:///private-build/vendor/symphonia-codec-aac#0.6.0'
 $references = @{
-    metadata = @{ component = @{ 'bom-ref' = $packageId; components = @(@{ 'bom-ref' = "$packageId bin-target-0" }) } }
+    metadata = @{ component = @{ 'bom-ref' = $packageId; components = @(@{ 'bom-ref' = "$packageId bin-target-0" }, @{ 'bom-ref' = $vendorId }) } }
     dependencies = @(@{ ref = $packageId; dependsOn = @($packageId, 'registry:dependency') })
 }
-$packages = @([pscustomobject]@{ id = $packageId; name = 'stemplayer'; version = $info.version })
+$packages = @(
+    [pscustomobject]@{ id = $packageId; name = 'stemplayer'; version = $info.version },
+    [pscustomobject]@{ id = $vendorId; name = 'symphonia-codec-aac'; version = '0.6.0' }
+)
 $sanitized = ConvertTo-Json -InputObject (Convert-PreviewSbomRefs $references $packages) -Depth 20 | ConvertFrom-Json
 Assert-Check ($references.metadata.component.'bom-ref' -ceq $packageId) 'SBOM conversion mutated its input'
 Assert-Check ($sanitized.metadata.component.'bom-ref' -ceq "workspace:stemplayer@$($info.version)") 'SBOM root reference still exposes a private path'
 Assert-Check ($sanitized.metadata.component.components[0].'bom-ref' -ceq "workspace:stemplayer@$($info.version) bin-target-0") 'SBOM target reference mismatch'
+Assert-Check ($sanitized.metadata.component.components[1].'bom-ref' -ceq 'workspace:symphonia-codec-aac@0.6.0') 'Vendored AAC reference still exposes a private path'
 Assert-Check ($sanitized.dependencies[0].dependsOn.Count -eq 2 -and $sanitized.dependencies[0].dependsOn[0] -ceq $sanitized.dependencies[0].ref) 'SBOM graph references or array shape changed'
 
 $assets = @(New-PreviewArchive $payload $output)

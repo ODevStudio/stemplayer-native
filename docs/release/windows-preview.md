@@ -6,6 +6,8 @@ This is the maintainer procedure for an unsigned portable preview, not a signed 
 
 Merge reviewed changes into `master`, then manually dispatch the existing `native-rust` workflow on that commit. The packaging job runs only for manual dispatch on `master`, after the integrity, quality, and dependency-policy jobs pass. It uses a fresh build directory, no restored build cache, read-only permissions, and pinned tools. It uploads only a ZIP and `SHA256SUMS.txt`; it never publishes a release.
 
+For a private repository on a free account, confirm the included Actions allowance before dispatching the multi-platform workflow. Enabling Actions alone does not run a build. Local verification does not replace the required CI artifact or authorize a visibility change.
+
 For local reproduction, use a clean committed checkout, the pinned Rust toolchain, Windows, and PowerShell 7 or newer:
 
 ```powershell
@@ -19,9 +21,9 @@ The packaging script builds `cargo build --locked --release -p stemplayer --targ
 
 The ZIP has one versioned folder containing only `stemplayer.exe`, `README.txt`, both project license files, `THIRD-PARTY-NOTICES.txt`, `sbom.cdx.json`, and `BUILD-INFO.json`. Build information records source commit, compiler, target, features, lock/binary hashes, and an explicitly unqualified unsigned state.
 
-Notices cover the selected Windows product graph, including build-time dependencies. MPL component notices include exact unmodified crate source download URLs. Slint uses the royalty-free 2.0 application license, not its GPL or commercial alternatives. cargo-about 0.9.2 omits matching LicenseRef text despite successful clarification; the script verifies the Slint license SHA-256 and appends that exact text. Do not dismiss other unresolved license failures. Re-review these clarifications when dependencies change.
+Notices cover the selected Windows product graph, including build-time dependencies. Registry URLs identify unmodified upstream sources. The scoped [AAC patch](../../vendor/symphonia-codec-aac/PATCHES.md) uses MPL-2.0 and requires complete modified sources at the exact public repository commit in `BUILD-INFO.json`; the script appends that source URL and rejects a mismatched notice. Do not distribute while this source location is private or unavailable. Slint uses the royalty-free 2.0 application license, not its GPL or commercial alternatives. cargo-about 0.9.2 omits matching LicenseRef text despite successful clarification; the script verifies the Slint license SHA-256 and appends that exact text. Do not dismiss other unresolved license failures. Re-review these clarifications when dependencies change.
 
-cargo-cyclonedx 0.5.9 writes per-workspace-member files and embeds absolute local package IDs. The wrapper uses unique filenames, retains only the product SBOM, removes its temporary files, and replaces local package IDs throughout the parsed JSON with stable workspace references while preserving dependency links. It runs offline after fetching and checks that the lockfile did not change. Its locked installation currently warns about a yanked build-tool-only `xml-rs 0.8.19`; this is not a shipped dependency or a new product advisory exception, and the generator consumes Cargo metadata and emits JSON rather than parsing untrusted XML. Review this tool warning before publication; do not remove `--locked` to hide it.
+cargo-cyclonedx 0.5.9 writes per-workspace-member files and embeds absolute local package IDs. The wrapper uses unique filenames, retains only the product SBOM, removes its temporary files, and replaces local package IDs, including the non-workspace vendored decoder, with stable references while preserving dependency links. It runs offline after fetching and checks that the lockfile did not change. Its locked installation currently warns about a yanked build-tool-only `xml-rs 0.8.19`; this is not a shipped dependency or a new product advisory exception, and the generator consumes Cargo metadata and emits JSON rather than parsing untrusted XML. Review this tool warning before publication; do not remove `--locked` to hide it.
 
 ## Upstream Notice Prerequisite
 
@@ -31,6 +33,8 @@ The dependency/license review required by [STATUS.md](../../STATUS.md) remains a
 - `realfft 3.5.0` declares MIT in its manifest and README, but neither the cached crate nor its recorded upstream tree at [`d0d4eee0525fd27c96c8a046d6d107acd5ed84a6`](https://github.com/HEnquist/realfft/tree/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6) includes a license file. Obtain authoritative release-specific license text and copyright/attribution evidence from upstream, or an approved legal resolution. Do not invent a copyright notice from the Cargo authors field.
 
 Review the remaining reported packages against the exact Windows candidate graph and retain verified provenance for every required notice. A fix for these two examples alone does not close the earlier inventory. Keep the accepted-license policy and missing-license failures intact; publication requires review of the actual candidate notices, not a successful tool exit alone.
+
+The package validator rejects the pinned collector's synthesized MIT copyright placeholder. This catches the observed unresolved notices; it does not prove complete notice coverage or replace upstream review. Online collection still falls back to that placeholder for packages including AccessKit and realfft. The [audit continuation](../qualification/windows-preview-audit-continuation.md) records the current result. Stop before creating a candidate while this prerequisite remains unresolved.
 
 ## Candidate Qualification
 

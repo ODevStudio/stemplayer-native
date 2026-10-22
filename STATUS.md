@@ -20,11 +20,11 @@ The 2026-10-21 [security refresh](docs/qualification/windows-preview-security-re
 
 The 2026-10-22 exposure review covered all local refs, including the four advertised remote branches and local checkpoints, all 92 reachable commits with merge diffs, and the Git-visible working source. Checksum-verified Gitleaks 8.30.1 ran locally in fully redacted mode. Its single source/history finding was fixture-policy prose, not a credential. Path, author, file-history, and fixture-provenance checks identified no private media, screenshots, raw qualification output, or personal machine paths in the publishable source/history. Original synthetic codec fixtures and both project licenses are retained.
 
-GitHub review covered repository metadata, both PRs and their discussions/reviews, and all nine available Actions logs. The nine log scanner matches were Cargo cache identifiers, not credentials. There are no releases/assets, Actions artifacts, or Actions caches; wiki and discussions are disabled. Actions itself remains disabled and was not changed.
+GitHub review covered repository metadata, both PRs and their discussions/reviews, and all nine available Actions logs. The nine log scanner matches were Cargo cache identifiers, not credentials. At that review there were no releases/assets, Actions artifacts, or Actions caches; wiki and discussions were disabled. Actions remained disabled during the exposure review; the approved continuation below enabled it without dispatching a hosted build.
 
 Local environment and signing-key files are now ignored. The repository checker passes from the normal root and still inspects force-added ignored Markdown. Raw scan/download evidence remains ignored, not publication content.
 
-Existing Git author/committer identities are retained. Visibility remains private and requires separate maintainer approval to change; no history rewrite or release publication is part of this preparation. Source publication approval is separate from the unchanged binary-release blockers above.
+Existing Git author/committer identities are retained. On 2026-10-22 the maintainer approved making the repository public, pushing the reviewed changes, and preparing the preview release. The final exposure review found no new secrets or private material in the pending changes; remote branches, issues, logs, and artifact inventories were unchanged. Source publication and draft-release preparation do not waive the binary-release blockers above. No history rewrite is authorized or required.
 
 ## Split Boundary
 
@@ -43,12 +43,12 @@ The web repository boundary is source commit `08dfe03cc4ada7b8cac84d6191198e25e5
 All 14 audit reports were gathered on 2026-10-22. Repairs have completed source-review cycles and serialized Windows x64 verification. A testing follow-up repaired the legacy saved-output migration and Windows cache-publication regressions; both fixes passed source review and the automated checks below. These changes are not a qualified preview candidate.
 
 - Windows waveform cache publication now succeeds without relaxing directory protections. The [cache contract](docs/architecture/cache-privacy.md) describes lock-serialized exclusive publication and partial-record recovery. Old index-based output selections migrate to System default; missing stable endpoint selections still require an explicit choice.
-- AAC perceptual-noise-substitution seek equivalence is blocked by the pinned decoder's private noise state. Synthetic repeated-seek and sequential-versus-seek comparisons fail and remain explicitly ignored in the normal suite. A scoped decoder patch requires approval and provenance/license review; the accepted format profile has not been weakened.
+- The maintainer approved a scoped AAC perceptual-noise-substitution fix on 2026-10-22. The [vendored patch](vendor/symphonia-codec-aac/PATCHES.md) restores deterministic bounded-seek noise output; both former failing demonstrations now run without `ignore`. Broader codec/listening qualification remains open; the accepted format profile is unchanged.
 - Real UI/NVDA, audio devices, suspend/resume, long soaks, Unix execution, the actual preview ZIP, and clean-system/release qualification have not been executed for these repairs.
 
 ### Integration Checks
 
-These results apply to the repaired source on Windows x64, not to the earlier preview binary. No executed test failures remain. The six ignored workspace tests include the two known-failing AAC PNS demonstrations and four existing qualification tests.
+This table is the pre-continuation Windows x64 baseline at `9f6c767`, not evidence for the earlier preview binary or the later decoder patch. Its six ignored tests included the two AAC PNS demonstrations. See the continuation record below for current checks.
 
 | Command | Result |
 | --- | --- |
@@ -71,3 +71,11 @@ These results apply to the repaired source on Windows x64, not to the earlier pr
 | `python scripts/check_repository.py` | Passed from the normal repository root after public-source cleanup |
 
 Repository-integrity checks no longer need a source-snapshot workaround. Rust commands were not repeated for the documentation/checker-only cleanup. No release, hardware, or clean-system gate is inferred from these results.
+
+## Release Continuation
+
+The [2026-10-22 continuation record](docs/qualification/windows-preview-audit-continuation.md) covers the audited source plus the approved decoder patch. All 331 workspace tests pass, with only the four existing qualification tests ignored; 97 product tests pass, with one existing device test ignored. The package validator now rejects the pinned collector's placeholder copyright text and binds modified AAC source notices to the build commit. Local source checks do not qualify a distributable.
+
+The upstream notice prerequisite in the [runbook](docs/release/windows-preview.md#upstream-notice-prerequisite) still blocks packaging/publication. The collector still synthesizes placeholder attribution even with online gathering. Do not reuse the 2026-10-21 ZIP after the audit/code changes, or claim its qualification applies to current source. A new exact-commit CI artifact and the manual preview gates are required after source and notice review.
+
+Actions is enabled with maintainer approval. No private-repository hosted job was dispatched during continuation. Push-triggered CI may run after the repository is public, using the existing standard GitHub-hosted runners. Prepare the Windows prerelease as a draft without binary assets while notice and qualification gates remain open; do not dispatch packaging while its known notice prerequisite fails. No qualified preview, signing, or stable-release completion is claimed.

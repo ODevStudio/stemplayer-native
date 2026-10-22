@@ -2,14 +2,15 @@ Stemplayer Native third-party notices
 
 Includes dependencies and build-time components for the Windows product build.
 Slint is used under LicenseRef-Slint-Royalty-free-2.0.
-MPL-2.0 component source is available from the exact crate download URLs below.
-The bundled crates are unmodified; retain these notices when redistributing.
+Unmodified MPL-2.0 component source is available from the exact crate URLs below.
+The local AAC decoder patch and its complete modified source are identified at the end.
+Retain these notices when redistributing.
 
 Components and selected licenses:
 {{#each crates}}
 {{#if package.source}}
 {{package.name}} {{package.version}}: {{license}}
-Source: https://crates.io/api/v1/crates/{{package.name}}/{{package.version}}/download
+Upstream source: https://crates.io/api/v1/crates/{{package.name}}/{{package.version}}/download
 {{/if}}
 {{/each}}
 
@@ -18,7 +19,7 @@ Source: https://crates.io/api/v1/crates/{{package.name}}/{{package.version}}/dow
 {{id}}: {{{name}}}
 {{#each used_by}}
 {{crate.name}} {{crate.version}}
-Source: https://crates.io/api/v1/crates/{{crate.name}}/{{crate.version}}/download
+Upstream source: https://crates.io/api/v1/crates/{{crate.name}}/{{crate.version}}/download
 {{/each}}
 
 {{{text}}}

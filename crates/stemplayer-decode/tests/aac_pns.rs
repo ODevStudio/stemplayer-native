@@ -58,7 +58,6 @@ fn original_noise_codebook_packet_decodes_to_finite_nonzero_stereo() {
 }
 
 #[test]
-#[ignore = "blocked on qualified AAC PNS decoder state restoration"]
 fn repeated_aac_pns_seek_restores_identical_pcm() {
     let mut decoder = decoder();
     let first = decode_noise_window(decoder.as_mut(), 5);
@@ -68,7 +67,6 @@ fn repeated_aac_pns_seek_restores_identical_pcm() {
 }
 
 #[test]
-#[ignore = "blocked on qualified AAC PNS decoder state restoration"]
 fn aac_pns_seek_with_two_packet_preroll_matches_sequential_pcm() {
     let mut sequential = decoder();
     for index in 0..5 {
@@ -79,4 +77,26 @@ fn aac_pns_seek_with_two_packet_preroll_matches_sequential_pcm() {
     let expected = decode_noise_window(sequential.as_mut(), 5);
     let actual = decode_noise_window(decoder().as_mut(), 5);
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn aac_pns_noise_is_stable_across_signed_and_large_timestamps() {
+    for position in [-128, -3, 0, 5, 12345, i64::from(u32::MAX) + 1] {
+        let mut reused = decoder();
+        decode_noise_window(reused.as_mut(), 0);
+        reused.reset();
+        let actual = decode_noise_window(reused.as_mut(), position);
+        let expected = decode_noise_window(decoder().as_mut(), position);
+        assert_eq!(expected, actual, "packet position {position}");
+    }
+}
+
+#[test]
+fn aac_pns_noise_varies_with_position_and_channel() {
+    let first = decode_noise_window(decoder().as_mut(), 5);
+    let later = decode_noise_window(decoder().as_mut(), 6);
+    let distant = decode_noise_window(decoder().as_mut(), 5 + (1 << 22));
+    assert_ne!(first, later);
+    assert_ne!(first, distant);
+    assert!(first.chunks_exact(2).any(|frame| frame[0] != frame[1]));
 }

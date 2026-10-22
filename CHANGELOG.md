@@ -2,6 +2,8 @@
 
 ## 0.1.0-preview.1 (Unreleased)
 
+- Made AAC noise-substitution output deterministic across bounded seeks with a scoped, source-documented Symphonia patch; rejected unresolved copyright placeholders in preview notices.
+
 - Added unsigned Windows x64 portable ZIP packaging with dependency notices, SBOM, checksums, build identity, static CRT linkage, and manual CI artifact preparation.
 - Patched eight dependency vulnerability findings in the ring buffer, TLS/certificate stack, and browser-opening helper; restricted three reviewed Linux D-Bus maintenance exceptions with a Windows dependency-graph check.
 

@@ -95,6 +95,13 @@ function Assert-PreviewPayload {
         -not $notices.Contains('MPL-2.0') -or -not $notices.Contains('Mozilla Public License')) {
         throw 'Required dependency license text is missing'
     }
+    if ($notices.Contains('Copyright (c) <year> <copyright holders>')) {
+        throw 'Unresolved dependency copyright/attribution in generated notices; review upstream evidence'
+    }
+    if (-not $notices.Contains('Modified symphonia-codec-aac 0.6.0 (MPL-2.0)') -or
+        -not $notices.Contains("Full modified source: https://github.com/ODevStudio/stemplayer-native/tree/$($info.source_commit)/vendor/symphonia-codec-aac")) {
+        throw 'Required modified AAC source notice does not match build identity'
+    }
     return $info
 }
 
@@ -134,6 +141,23 @@ function Add-PreviewSlintLicense {
     [IO.File]::AppendAllText($Notices, "`n" + [IO.File]::ReadAllText($license), [Text.UTF8Encoding]::new($false))
 }
 
+function Add-PreviewAacNotice {
+    param([object]$Metadata, [string]$Notices, [string]$Commit)
+
+    $aac = @($Metadata.packages | Where-Object name -EQ 'symphonia-codec-aac')
+    $expected = [IO.Path]::GetFullPath((Join-Path $Metadata.workspace_root 'vendor/symphonia-codec-aac/Cargo.toml'))
+    if ($aac.Count -ne 1 -or $aac[0].version -cne '0.6.0' -or $aac[0].source -or
+        -not [IO.Path]::GetFullPath($aac[0].manifest_path).Equals($expected, [StringComparison]::OrdinalIgnoreCase) -or
+        $Commit -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'Modified AAC source provenance must be reviewed for this build'
+    }
+    $notice = "`nModified symphonia-codec-aac 0.6.0 (MPL-2.0)`n" +
+        "Full modified source: https://github.com/ODevStudio/stemplayer-native/tree/$Commit/vendor/symphonia-codec-aac`n" +
+        "Packet-local PNS noise state patch; see PATCHES.md at that source location.`n" +
+        "The source location must be public and accessible before binary distribution.`n"
+    [IO.File]::AppendAllText($Notices, $notice, [Text.UTF8Encoding]::new($false))
+}
+
 function New-PreviewSbom {
     param([object]$Metadata, [string]$Tool, [string]$Destination, [string]$Root)
 
@@ -156,7 +180,7 @@ function New-PreviewSbom {
             throw 'Generated SBOM exceeds the preview limit'
         }
         $bom = Get-Content -LiteralPath $generated -Raw | ConvertFrom-Json -AsHashtable
-        $packages = @($Metadata.packages | Where-Object { $_.id -in $Metadata.workspace_members })
+        $packages = @($Metadata.packages | Where-Object { -not $_.source })
         $sanitized = Convert-PreviewSbomRefs $bom $packages
         [IO.File]::WriteAllText($Destination, (ConvertTo-Json -InputObject $sanitized -Depth 100), [Text.UTF8Encoding]::new($false))
         if ((Get-FileHash -LiteralPath (Join-Path $Root 'Cargo.lock') -Algorithm SHA256).Hash -cne $lock) {
@@ -246,6 +270,7 @@ function Invoke-WindowsPreviewPackage {
             'apps/stemplayer/Cargo.toml', '--target', 'x86_64-pc-windows-msvc', '--config', 'about.toml',
             '--output-file', $notices, 'scripts/preview-notices.hbs')
         Add-PreviewSlintLicense $metadata $notices
+        Add-PreviewAacNotice $metadata $notices $commit
         $env:CARGO_NET_OFFLINE = 'true'
         New-PreviewSbom $metadata $cyclonedx (Join-Path $payload 'sbom.cdx.json') $root
         $info = [ordered]@{
