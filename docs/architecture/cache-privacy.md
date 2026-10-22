@@ -28,6 +28,8 @@ Least-recently-used metadata drives eviction before a write. Metadata enumeratio
 
 Disable prevents future reads/writes but does not stop analysis. Clear-current and clear-all affect only this versioned application cache root and never follow links. Concurrent processes must acquire the operation lock or report a recoverable busy error. The Windows writer reuses existing records only after validation against the expected fingerprint, sample rate, and timeline. A failed write cleans up only a record created by that operation, without truncating a pre-existing record.
 
+On Unix the operation guard explicitly unlocks before closing its descriptor. A duplicate inherited during process creation must not retain a completed operation's lock until that duplicate closes. Directory identity checks and nonblocking lock acquisition remain required.
+
 ## Diagnostics And Proof
 
 Diagnostics expose enabled state, hit/miss/error, current and total bytes, and redacted error code. Privacy tests scan serialized records for fixture basenames, absolute path fragments, manifest text, URL hosts, and known encoded/PCM byte sequences. Corruption, truncation, oversized lengths, duplicate names, eviction, and interrupted-write tests must fail closed.

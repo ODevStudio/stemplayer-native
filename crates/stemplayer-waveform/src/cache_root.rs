@@ -19,6 +19,13 @@ pub(super) struct CacheGuard {
     _lock: File,
 }
 
+#[cfg(unix)]
+impl Drop for CacheGuard {
+    fn drop(&mut self) {
+        let _ = self._lock.unlock();
+    }
+}
+
 impl CacheRoot {
     pub(super) fn new(path: PathBuf) -> Result<Self, PlayerError> {
         let path = if path.is_absolute() {
@@ -264,4 +271,28 @@ fn root_error(source: std::io::Error) -> PlayerError {
         "Waveform cache root is unavailable",
     )
     .with_source(source)
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn dropping_a_cache_guard_unlocks_before_duplicated_descriptors_close() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "stemplayer-cache-lock-drop-{}-{nonce}",
+        std::process::id()
+    ));
+    let lock = File::create_new(&path).unwrap();
+    lock.try_lock().unwrap();
+    let duplicated = lock.try_clone().unwrap();
+    let guard = CacheGuard { _lock: lock };
+    drop(guard);
+    let contender = File::open(&path).unwrap();
+    let acquired = contender.try_lock();
+    drop(contender);
+    drop(duplicated);
+    fs::remove_file(path).unwrap();
+    assert!(acquired.is_ok(), "A dropped cache guard retained its lock");
 }
