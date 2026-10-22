@@ -93,3 +93,24 @@ The [replacement CI run](https://github.com/ODevStudio/stemplayer-native/actions
 A maintainer-only draft prerelease has been prepared for `v0.1.0-preview.1`, without assets or a published Git tag. It explicitly lists the outstanding upstream notice and manual qualification gates; it is not a published Windows release.
 
 The next [CI run](https://github.com/ODevStudio/stemplayer-native/actions/runs/39861185233) passed Ubuntu quality and the Windows checks, but macOS stopped earlier in a parser test: two parallel fixture requests received the same timestamp-only temporary filename and exclusive creation correctly rejected the collision. The shared MP4 fixture helper now adds an atomic per-process sequence, with a 2,048-path parallel uniqueness check. Exclusive file creation and every parser assertion remain intact. Package tests pass on Windows x64 and Ubuntu 24.04 WSL: 43 passed and one existing fixture qualification ignored on each. Package all-target/all-feature Clippy passes on Windows; no production parser or format contract changed. Workspace CI now uses `--no-fail-fast` to report all crate failures in one run without accepting any failure. The final full hosted run must still confirm these repairs together.
+
+## Final Source CI
+
+On 2026-10-23 (Europe/Berlin), [run 39862835870](https://github.com/ODevStudio/stemplayer-native/actions/runs/39862835870) completed successfully for source commit `20a196d2bcd42ff8a7a12cbe5a30568345eef05c`. Workflow integrity, dependency policy, and all three quality jobs passed. This is source verification, not a Windows release qualification.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS on Windows, Ubuntu, macOS |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | PASS on all three |
+| `cargo test --locked --workspace --all-features --no-fail-fast` | PASS on all three; Windows: 332 passed, 0 failed, 4 existing qualifications ignored |
+| `cargo test --locked -p stemplayer` | PASS on all three; Windows: 97 passed, 0 failed, 1 existing device qualification ignored |
+| `cargo build --locked --release -p stemplayer` | PASS on all three; ordinary source builds, not packaged candidates |
+| `cargo run --locked -p stemplayer --no-default-features --features development -- --ui-smoke 1000` | PASS on all three; Linux used Xvfb, and these are separate development-profile executables |
+| `cargo check --locked --workspace --no-default-features` | PASS on all three |
+| `cargo check --locked --workspace --all-features` | PASS on all three |
+| `cargo deny check` | PASS; existing reviewed advisory exceptions and tool warnings retained |
+| `pwsh -NoProfile -File scripts/test-windows-preview.ps1` | PASS on Windows; synthetic archive/checksum/identity/notice checks only |
+
+The raw Windows and macOS diagnostics were reviewed. macOS explicitly passes the previously failing directory-alias/anchor checks, the new duplicated-descriptor lock regression, and parallel temporary-path uniqueness. The hosted workflow retains action-runtime deprecation annotations for pinned checkout/cache actions forced onto Node.js 24; these are CI tools, not a product runtime. No new advisory or license-policy exception was added.
+
+Packaging was skipped as intended on this push-triggered run. No manual packaging dispatch, refreshed ZIP, public release tag, binary publication, upstream issue, or clean-system/manual qualification is claimed. The remaining realfft notice prerequisite and unavailable clean Windows environment are unchanged. Documentation-only follow-up records this completed source run without changing its tested runtime code.
