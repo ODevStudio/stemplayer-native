@@ -2,6 +2,8 @@
 
 ## Phase 11
 
+The [Windows hobby preview](docs/release/windows-preview.md) is a limited unsigned portable ZIP exception. It preserves all runtime security boundaries and does not satisfy the signed-installer or stable-release exit gates.
+
 Complete Windows operating-system integration and a signed per-user installer. Define product identity and versioning, safe file associations, single-instance routing, media controls, lifecycle policy, dependency notices, SBOM output, signature verification, upgrade and uninstall qualification, and release provenance.
 
 The phase is blocked by missing approved identity, signing, packaging, and clean-system qualification inputs. See [STATUS.md](STATUS.md).

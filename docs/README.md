@@ -12,6 +12,7 @@ Start with the smallest document that answers the task. This index is for contri
 ## User and contributor policies
 
 - [Security](../SECURITY.md)
+- [Windows hobby preview](release/windows-preview.md)
 - [Compatibility](compatibility.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Documentation policy](maintenance/documentation-policy.md)

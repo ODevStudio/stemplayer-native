@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-preview.1 (Unreleased)
+
+- Added unsigned Windows x64 portable ZIP packaging with dependency notices, SBOM, checksums, build identity, static CRT linkage, and manual CI artifact preparation.
+- Patched eight dependency vulnerability findings in the ring buffer, TLS/certificate stack, and browser-opening helper; restricted three reviewed Linux D-Bus maintenance exceptions with a Windows dependency-graph check.
+
 ## 2026-08-19
 
 - Added the native Windows application icon and aligned its four stem bars with the product waveform colors.

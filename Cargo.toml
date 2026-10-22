@@ -34,7 +34,7 @@ default-members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-preview.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.97"
@@ -42,7 +42,7 @@ rust-version = "1.97"
 [workspace.dependencies]
 cpal = { version = "=0.18.1", features = ["realtime"] }
 fastrand = "=2.5.0"
-rtrb = "=0.3.4"
+rtrb = "=0.3.5"
 rfd = { version = "=0.15.4", default-features = false }
 rubato = "=4.0.0"
 serde = { version = "=1.0.229", features = ["derive", "rc"] }

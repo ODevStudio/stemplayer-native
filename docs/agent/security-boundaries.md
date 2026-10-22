@@ -39,4 +39,4 @@ Applies to `stemplayer-output` and render/callback paths.
 
 ## Release and OS integration
 
-Shell inputs, file associations, local routing, installer metadata, signatures, and update metadata are untrusted. Phase 11 work must follow the current plan and cannot proceed past blocked identity, signing, or toolchain gates by inventing placeholder production values.
+Shell inputs, file associations, local routing, installer metadata, signatures, and update metadata are untrusted. Phase 11 work must follow the current plan and cannot proceed past blocked identity, signing, or toolchain gates by inventing placeholder production values. The [unsigned hobby preview](../release/windows-preview.md) is an explicit portable-only exception, not a signed-release qualification or permission to bypass Windows protections.

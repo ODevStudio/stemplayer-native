@@ -8,6 +8,8 @@ macOS and Linux packaging are optional Phase 12 expansions. Automatic updates re
 
 ## Entry Criteria
 
+The [Windows hobby preview](../release/windows-preview.md) may produce an explicitly unsigned portable ZIP without signing credentials, an installer toolchain, or new OS application registration. This exception retains the existing identity and runtime behavior, requires manual qualification and publication, and does not pass this phase's exit gate. All requirements below remain in force for the signed installed release.
+
 - Local UI, playback, mixer, waveform, diagnostics, and `stem-hls-v1` gates are complete.
 - The supported Windows architecture and release scope are approved.
 - Product display name, publisher identity, application identifier, versioning policy, and icon artwork are approved.

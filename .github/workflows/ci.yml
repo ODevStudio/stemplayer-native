@@ -78,6 +78,10 @@ jobs:
         run: cargo test --locked --workspace --all-features
       - name: Product tests
         run: cargo test --locked -p stemplayer
+      - name: Preview packaging checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-preview.ps1
       - name: Product release build
         run: cargo build --locked --release -p stemplayer
       - name: UI startup smoke
@@ -117,3 +121,41 @@ jobs:
           fi
       - name: Enforce dependency policy
         run: cargo deny check
+
+  package-windows-preview:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    needs: [workflow-integrity, quality, dependency-policy]
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel = "([^"]+)"$').Matches.Groups[1].Value
+          if (-not $channel) { throw 'Missing pinned toolchain' }
+          rustup toolchain install --profile minimal --target x86_64-pc-windows-msvc $channel
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
+      - name: Install pinned release tools
+        run: |
+          cargo install --locked cargo-about --version 0.9.2 --features cli --root artifacts/release-tools
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-about installation failed' }
+          cargo install --locked cargo-cyclonedx --version 0.5.9 --root artifacts/release-tools
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-cyclonedx installation failed' }
+      - name: Build unqualified unsigned preview
+        run: ./scripts/package-windows-preview.ps1
+      - name: Upload candidate ZIP and checksum only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact v4.6.2
+        with:
+          name: windows-preview-${{ github.sha }}
+          path: |
+            artifacts/windows-preview/*/stemplayer-native-*-windows-x86_64.zip
+            artifacts/windows-preview/*/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

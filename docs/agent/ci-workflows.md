@@ -28,6 +28,12 @@ Workflow YAML, action SHAs, runner labels, and repository feature availability m
 
 The accepted license list matches the locked workspace graph, including Slint's declared GPL and royalty-free alternatives. Registry dependencies are limited to crates.io and Git dependencies are denied. Duplicate versions warn because the cross-platform Slint graph currently requires parallel major and minor lines. cargo-deny 0.20 also reports `workspace = true` path dependencies as wildcard dependencies, so that warning remains visible without rejecting the workspace's exact local dependencies. The two current quick-xml advisories are narrowly ignored because the affected crate is only a Wayland protocol build dependency, the product does not parse XML, and the current wayland-scanner requirement blocks the fixed release; remove both exceptions when that dependency can move to quick-xml 0.41 or newer. Three unmaintained transitive font or macro crates are also explicit exceptions because their advisories report no safe upgrade in the locked Slint graph; revisit them with every Slint update.
 
+### Linux D-Bus Maintenance Exceptions
+
+On 2026-10-21 the maintainer approved `RUSTSEC-2026-0370` (`zvariant 5.13.1`), `RUSTSEC-2026-0371` (`zbus_names 4.3.4`), and `RUSTSEC-2026-0372` (`zvariant_derive 5.13.1`). These are maintenance-only notices: the retired crates were incorporated into zbus 6. The locked Linux graph still needs zbus 5 through Slint's winit/accesskit backend and rfd's ashpd portal. No compatible complete upgrade is available through those parents. Linux is not a supported preview target.
+
+These three exact IDs are ignored, not their packages or future vulnerabilities. The workspace `cargo deny check` gate remains required. The product integration test `windows_product_excludes_retired_linux_dbus_packages` rejects any of these packages reachable from the default Windows application graph. Review the exceptions at every Slint/rfd update; remove them once all parents migrate off the retired crates. Linux distribution requires a new dependency and qualification review. See the [security refresh evidence](../qualification/windows-preview-security-refresh.md).
+
 ## Optional GitHub security automation
 
 Enable dependency review, CodeQL, and required security rules only when they are available for this private repository and account. Do not add an unavailable service as a required gate.
@@ -40,4 +46,4 @@ Ordinary pull requests must not depend on audio hardware, interactive desktop st
 
 ## Release boundary
 
-`STATUS.md` currently blocks packaging and signing. A workflow may compile an unsigned release binary for regression detection, but it must not publish, sign, create an installer, enable automatic updates, or represent the artifact as qualified.
+The [Windows hobby preview](../release/windows-preview.md) permits a manual-dispatch-only packaging job after all ordinary CI gates pass. Use a clean build directory, no restored build cache, read-only repository permissions, and pinned build tools/actions. Upload candidate artifacts only; do not publish, sign, create an installer, enable automatic updates, or represent the artifact as qualified. See `STATUS.md` for remaining publication and signed-release blockers.

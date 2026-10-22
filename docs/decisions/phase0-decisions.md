@@ -57,11 +57,13 @@ Versions are exact Phase 0 candidates, not permission for automatic updates.
 | Audio | CPAL 0.18.1, adopt | Apache-2.0 | Active cross-platform low-level crate; OS backends selected per target | Callback API can be allocation-free; backend internals contain platform unsafe; error/promotion callbacks stay outside render work | Thin output adapter; no device policy in engine. |
 | Demux/decode | Symphonia 0.6.0 with WAV/PCM/ISO-MP4/AAC/ALAC only, accepted for Phase 1 boundary | MPL-2.0 | Active pure-Rust framework; selected features avoid unrelated codecs/formats | Decode allocates and may block; decoder workers only, never callback | Phase 0 exact presentation-window/repeat/seek/memory feasibility passed; Phase 7 retains adversarial and soak qualification. |
 | Resampling | Rubato 4.0.0, adopt for prototype | MIT OR Apache-2.0 | Active; FFT graph is non-trivial but bounded | Preallocate resampler and adapters off callback; process prepared stereo on render worker, not device callback | One post-mix adapter; benchmark quality/latency in Phase 6. |
-| Ring | rtrb 0.3.4, adopt | MIT OR Apache-2.0 | Small focused SPSC crate | Preallocates once; push/pop lock-free and wait-free; implementation uses reviewed unsafe internally | Wrap in output crate with fixed capacity and overflow counters. |
+| Ring | rtrb 0.3.5, adopt | MIT OR Apache-2.0 | Small focused SPSC crate; security patch applied 2026-10-21 | Preallocates once; push/pop lock-free and wait-free; implementation uses reviewed unsafe internally | Wrap in output crate with fixed capacity and overflow counters. |
 | SHA-256 | sha2 0.11.0, adopt | MIT OR Apache-2.0 | Active RustCrypto implementation; small selected surface | No hashing in callback; implementation may use target acceleration | One streaming integrity adapter. |
 | HTTP/TLS | ureq 3.3.0 with rustls, provisional for Phase 10 | MIT OR Apache-2.0 | Active synchronous client; default gzip must be disabled for bounded media | Blocking/network/allocation only on network workers; TLS graph requires security/license audit | Redirects/credentials disabled in adapter; reconsider async client only if measured concurrency requires it. |
 
 No internal ring, hash, HTTP, or decoder abstraction is built in Phase 0 beyond the smallest adapter boundary named above. The attached audit reports 602 locked packages, zero vulnerabilities, zero ignored advisories, zero unlicensed crates, and four unmaintained Slint-transitive warnings. Handwritten code denies unsafe; dependency unsafe remains isolated behind UI/audio/codec adapters and is reviewed again before release.
+
+The audit counts above describe Phase 0 only. The [2026-10-21 security refresh](../qualification/windows-preview-security-refresh.md) records current dependency changes and checks; Phase 0 measurements do not qualify the refreshed preview binary.
 
 ## Budgets
 

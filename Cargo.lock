@@ -1026,16 +1026,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-foundation"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
-dependencies = [
- "core-foundation-sys",
- "libc",
-]
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1048,7 +1038,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c07782be35f9e1140080c6b96f0d44b739e2278479f64e02fdab4e32dfd8b081"
 dependencies = [
  "bitflags 1.3.2",
- "core-foundation 0.9.4",
+ "core-foundation",
  "core-graphics-types",
  "foreign-types",
  "libc",
@@ -1061,7 +1051,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45390e6114f68f718cc7a830514a96f903cccd70d02a8f6d9f643ac4ba45afaf"
 dependencies = [
  "bitflags 1.3.2",
- "core-foundation 0.9.4",
+ "core-foundation",
  "libc",
 ]
 
@@ -1476,7 +1466,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4408,9 +4398,9 @@ dependencies = [
 
 [[package]]
 name = "rtrb"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ade083ccbb4bf536df69d1f6432cc23deb7acccff86b183f3923a6fd56a1153"
+checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
 
 [[package]]
 name = "rubato"
@@ -4486,14 +4476,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -4515,9 +4505,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -5019,7 +5009,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stemplayer"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "embed-resource",
  "fastrand",
@@ -5041,7 +5031,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-callback-audit"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde_json",
  "stemplayer-domain",
@@ -5051,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-decode"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde",
  "stemplayer-domain",
@@ -5062,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-domain"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5070,7 +5060,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-engine"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde_json",
  "stemplayer-decode",
@@ -5083,7 +5073,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-format"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5094,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-mixer"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde",
  "stemplayer-domain",
@@ -5102,7 +5092,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-network"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5117,7 +5107,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-output"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "cpal",
  "rtrb",
@@ -5128,7 +5118,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-phase0-probe"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "cpal",
  "rtrb",
@@ -5143,7 +5133,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-platform"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5153,7 +5143,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-probe"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "serde_json",
  "stemplayer-decode",
@@ -5167,14 +5157,14 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-timeline"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "stemplayer-domain",
 ]
 
 [[package]]
 name = "stemplayer-ui"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "stemplayer-domain",
  "stemplayer-mixer",
@@ -5182,7 +5172,7 @@ dependencies = [
 
 [[package]]
 name = "stemplayer-waveform"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "sha2 0.10.9",
  "stemplayer-domain",
@@ -5487,10 +5477,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6284,15 +6274,15 @@ dependencies = [
 
 [[package]]
 name = "webbrowser"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
+checksum = "ef62a3d5f7b2411119a11b6f62570dbff91d7105e011a20fb83fbf8f5761c40f"
 dependencies = [
- "core-foundation 0.10.1",
  "jni",
  "log",
  "ndk-context",
  "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "url",
  "web-sys",
@@ -6300,9 +6290,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -6319,7 +6309,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6613,7 +6603,7 @@ dependencies = [
  "calloop 0.13.0",
  "cfg_aliases",
  "concurrent-queue",
- "core-foundation 0.9.4",
+ "core-foundation",
  "core-graphics",
  "cursor-icon",
  "dpi",

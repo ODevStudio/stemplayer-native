@@ -287,4 +287,6 @@ Skipping or failing this work package leaves the affected platform unsupported a
 
 ## Exit gate
 
+The separately approved [unsigned hobby preview](../release/windows-preview.md) uses a limited qualification checklist and must not be described as Phase 12 complete or generally available. Its checklist does not waive security, license, core accessibility, corruption, or unbounded-resource failures.
+
 Phase 12 is complete when the Windows package passes functional, sample-accuracy, stability, performance, security, accessibility, and installation gates; remaining limitations are explicit and accepted; rollback is ready; and the release is demonstrably a standalone fully native Rust player that leaves the webplayer untouched. Optional macOS/Linux expansion does not block Windows completion, but an optional platform is unsupported unless its full work package passes.

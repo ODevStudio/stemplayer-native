@@ -44,6 +44,8 @@ Also run the relevant probe, synthetic integration, or qualification script. Har
 
 ## Manual Windows gates
 
+Preview packaging has a focused runnable check: `pwsh -NoProfile -File scripts/test-windows-preview.ps1`. Run it on Windows in ordinary CI, then follow the [preview checklist](../release/windows-preview.md) against the actual candidate ZIP. The packaging check is not clean-system or playback evidence.
+
 | Behavior | Script |
 | --- | --- |
 | Primitive UI, codec, and NVDA qualification | `scripts/measure-windows.ps1`, `scripts/qualify-windows-ui.ps1`, `scripts/qualify-windows-codecs.ps1`, `scripts/qualify-windows-nvda.ps1` |
