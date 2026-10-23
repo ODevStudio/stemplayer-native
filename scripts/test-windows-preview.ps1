@@ -87,6 +87,8 @@ foreach ($file in Get-PreviewFiles) {
 $noticesPath = Join-Path $payload 'THIRD-PARTY-NOTICES.txt'
 $notices = 'Slint Royalty-free Desktop, Mobile, and Web Applications License; MPL-2.0; Mozilla Public License; ' +
     'Copyright 2015 The Chromium Authors. All rights reserved.; Neither the name of Google Inc.' +
+    "`nrealfft 3.5.0 upstream MIT declaration`nUpstream README: License: MIT`n" +
+    'https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/README.md' +
     "`nModified symphonia-codec-aac 0.6.0 (MPL-2.0)`nFull modified source: https://github.com/ODevStudio/stemplayer-native/tree/" +
     ('1' * 40) + '/vendor/symphonia-codec-aac'
 [IO.File]::WriteAllText($noticesPath, $notices)
@@ -139,6 +141,8 @@ Write-TestJson $bomPath $bom
 Assert-Failure { Assert-PreviewPayload $payload } 'license text'
 [IO.File]::WriteAllText($noticesPath, $notices + "`nCopyright (c) <year> <copyright holders>")
 Assert-Failure { Assert-PreviewPayload $payload } 'copyright/attribution'
+[IO.File]::WriteAllText($noticesPath, $notices.Replace('Upstream README: License: MIT', ''))
+Assert-Failure { Assert-PreviewPayload $payload } 'realfft upstream MIT declaration'
 [IO.File]::WriteAllText($noticesPath, $notices.Replace('Copyright 2015 The Chromium Authors. All rights reserved.', ''))
 Assert-Failure { Assert-PreviewPayload $payload } 'Chromium attribution'
 [IO.File]::WriteAllText($noticesPath, $notices)

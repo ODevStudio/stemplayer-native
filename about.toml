@@ -21,6 +21,12 @@ ignore-dev-dependencies = true
 private = { ignore = true }
 workarounds = ["chrono", "ring", "rustls", "unicode-ident"]
 
+[realfft.clarify]
+license = "MIT"
+[[realfft.clarify.files]]
+path = "README.md"
+checksum = "1e92c54e7fa08298d2a34ea9aa63b85626c47519873a91cd1028f234e1221608"
+
 [slint.clarify]
 license = "LicenseRef-Slint-Royalty-free-2.0"
 [[slint.clarify.files]]

@@ -110,6 +110,11 @@ function Assert-PreviewPayload {
     if ($notices.Contains('Copyright (c) <year> <copyright holders>')) {
         throw 'Unresolved dependency copyright/attribution in generated notices; review upstream evidence'
     }
+    if (-not $notices.Contains('realfft 3.5.0 upstream MIT declaration') -or
+        -not $notices.Contains('https://github.com/HEnquist/realfft/blob/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6/README.md') -or
+        -not $notices.Contains('Upstream README: License: MIT')) {
+        throw 'Required realfft upstream MIT declaration is missing'
+    }
     if (-not $notices.Contains('Copyright 2015 The Chromium Authors. All rights reserved.') -or
         -not $notices.Contains('Neither the name of Google Inc.')) {
         throw 'Required AccessKit Chromium attribution is missing'

@@ -1,4 +1,4 @@
-# Windows Hobby Preview Runbook
+# Windows Preview Runbook
 
 This is the maintainer procedure for an unsigned portable preview, not a signed installer or stable-release qualification. [STATUS.md](../../STATUS.md) records remaining blockers. Start at `0.1.0-preview.1`, retain the existing product identity and default `product` features, and target Windows 11 24H2 or newer, x64 only.
 
@@ -27,18 +27,20 @@ cargo-cyclonedx 0.5.9 writes per-workspace-member files and embeds absolute loca
 
 ## Upstream Notice Prerequisite
 
-The dependency/license review required by [STATUS.md](../../STATUS.md) remains a publication blocker. [Native PR #1](https://github.com/ODevStudio/stemplayer-native/pull/1#issuecomment-5774733220) recorded 25 Windows-target packages without packaged license texts. Successful `cargo-about --fail` generation does not resolve this prerequisite: the tool can fall back to canonical SPDX text without crate-specific copyright or attribution evidence.
+Dependency/license review is mandatory. [Native PR #1](https://github.com/ODevStudio/stemplayer-native/pull/1#issuecomment-5774733220) recorded 25 Windows-target packages without packaged license texts. Successful `cargo-about --fail` generation alone does not resolve notice review: the tool can fall back to canonical SPDX text without preserving available crate-specific attribution.
 
 - `accesskit 0.24.1` omits license files from the cached crate. Its recorded upstream revision is [`a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969`](https://github.com/AccessKit/accesskit/tree/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969), with the crate under `common/`. The reviewed clarifications now bind its root `LICENSE-APACHE` and `LICENSE.chromium` texts by checksum, including the Chromium BSD obligation omitted by generic MIT fallback. The same review covers the locked consumer/Windows/winit crates at their recorded revisions.
-- `realfft 3.5.0` declares MIT in its manifest and README, but neither the cached crate nor its recorded upstream tree at [`d0d4eee0525fd27c96c8a046d6d107acd5ed84a6`](https://github.com/HEnquist/realfft/tree/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6) includes a license file. Obtain authoritative release-specific license text and copyright/attribution evidence from upstream, or an approved legal resolution. Do not invent a copyright notice from the Cargo authors field.
+- `realfft 3.5.0` explicitly declares MIT in its manifest and README at [`d0d4eee0525fd27c96c8a046d6d107acd5ed84a6`](https://github.com/HEnquist/realfft/tree/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6); the [upstream owner's statement](https://github.com/HEnquist/realfft/issues/45) also confirms MIT. The reviewed notice uses that declaration, checksum-bound README (`1e92c54e7fa08298d2a34ea9aa63b85626c47519873a91cd1028f234e1221608`), upstream author metadata explicitly labeled as metadata, and standard MIT terms. Neither the published crate nor that source tree supplies a separate copyright notice. Do not invent one from the authors field or ship the collector's placeholder. The template handles only this exact version and single-component MIT section; other notices are unchanged.
 
 Review the remaining reported packages against the exact Windows candidate graph and retain verified provenance for every required notice. A fix for these two examples alone does not close the earlier inventory. Keep the accepted-license policy and missing-license failures intact; publication requires review of the actual candidate notices, not a successful tool exit alone.
 
-The package validator rejects the pinned collector's synthesized MIT copyright placeholder and requires AccessKit's Chromium attribution. This catches observed unresolved notices; it does not prove complete notice coverage or replace upstream review. After reviewing the current missing-file inventory and adding checksum-bound upstream clarifications, only realfft still falls back to the rejected placeholder. The [audit continuation](../qualification/windows-preview-audit-continuation.md#notice-repairs-and-public-ci) records the exact upstream provenance and remaining prerequisite. Stop before creating a candidate while it remains unresolved.
+The package validator rejects the pinned collector's synthesized MIT copyright placeholder and requires both AccessKit's Chromium attribution and realfft's exact upstream declaration. This catches observed collector defects; it does not replace review of the candidate notices. The [audit continuation](../qualification/windows-preview-audit-continuation.md#notice-repairs-and-public-ci) records the earlier upstream inventory. The accepted-license policy and missing-license/collector-diagnostic failures remain enforced.
 
 ## Candidate Qualification
 
 Download the successful workflow artifact and retain the ZIP bytes unchanged. Compare its SHA-256 to `SHA256SUMS.txt` with `Get-FileHash -Algorithm SHA256`. A checksum detects changed downloads, not publisher identity. Extract a test copy with Windows tools and record the version, commit, target, feature set, compiler, ZIP/binary/lock hashes, Windows build, test date, and operator. Store raw evidence outside source control; commit only a concise redacted summary when approved.
+
+Automated build, integrity, dependency/license, archive, and checksum checks are mandatory before experimental preview publication. The manual checks below remain qualification work, not implied passes: unavailable manual environments do not turn the preview into a qualified or stable release. Known security, license, corruption, accessibility, unexpected-resume, or unbounded-resource failures still block distribution.
 
 - [ ] Run the [Tier 2 and release checks](../agent/verification.md), product tests, packaging check, and `cargo deny check`. Review the explicit advisory exceptions; do not widen them to make a release pass.
 - [ ] Inspect archive entries, notices, SBOM identity/dependencies, and executable imports. Scan the actual assets for secrets, private source paths, private fixtures, raw qualification data, debug symbols, and unwanted runtimes. Preserve and review complete diagnostics. A dependency inventory or hosted build alone is insufficient evidence.
@@ -60,12 +62,12 @@ The maintainer changes the existing repository to public only after approving th
 
 ## Manual Publication
 
-After all preview gates pass, use the tested source commit, never a newly rebuilt binary. Check that version, tag, artifact name, and build information agree. Preserve the artifact in approved release storage before workflow retention expires.
+After the mandatory automated and asset checks pass, use the exact CI source commit and artifact, never a newly rebuilt binary. Check that version, tag, artifact name, and build information agree. Preserve the artifact in approved release storage before workflow retention expires. Keep manual qualification status accurate in `STATUS.md`; release notes describe the program without claiming unexecuted checks passed.
 
 1. Tag the exact tested commit `v0.1.0-preview.1` and push that tag without moving an existing tag.
-2. Create a draft GitHub prerelease for that tag. Attach only the original candidate ZIP and matching `SHA256SUMS.txt`.
-3. Start with [preview release notes](preview-notes.md). Append the tested commit, hashes, Windows build, redacted qualification/performance results, and accepted non-blocking limitations. Keep the Slint badge visible on the actual public download page.
-4. Download the draft assets and compare hashes against the tested originals. Review unsigned-warning wording and privacy-conscious issue instructions, then manually publish as a prerelease, not a stable/latest release.
+2. Create or update the GitHub prerelease for that tag. Attach only the original candidate ZIP and matching `SHA256SUMS.txt`.
+3. Use the product-focused [preview release notes](preview-notes.md), the exact commit in `BUILD-INFO.json`, and the separate checksum asset. Keep the Slint badge visible on the actual public download page. Do not claim stable qualification or unexecuted checks passed.
+4. Download the published assets and compare hashes against the verified originals. Confirm the release is public and marked as a prerelease, not a stable/latest release, with the unsigned-warning and privacy-conscious issue instructions intact.
 5. Update `STATUS.md` with actual preview evidence without marking Phase 11/12 complete. Do not commit raw output or machine-specific information.
 
 Updates are manual. Keep published assets and tags immutable; a fix increments the preview version and repeats affected gates. For an unsafe release, withdraw access to its assets, publish an advisory with affected versions and mitigation, and issue a new version. Do not silently replace a binary or ask users to disable protection. No telemetry or scheduled monitoring is added; the maintainer handles opt-in issues and private security reports.

@@ -1,4 +1,4 @@
-Stemplayer Native - unsigned Windows hobby preview
+Stemplayer Native - Windows audio and stem player
 
 Requirements: Windows 11 24H2 or newer, x64. Other platforms are unsupported.
 Extract the whole ZIP into a folder you control, then run stemplayer.exe.
