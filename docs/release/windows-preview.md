@@ -11,13 +11,15 @@ For a private repository on a free account, confirm the included Actions allowan
 For local reproduction, use a clean committed checkout, the pinned Rust toolchain, Windows, and PowerShell 7 or newer:
 
 ```powershell
-cargo install --locked cargo-about --version 0.9.2 --features cli --root artifacts/release-tools
-cargo install --locked cargo-cyclonedx --version 0.5.9 --root artifacts/release-tools
+cargo install --locked --debug cargo-about --version 0.9.2 --features cli --root artifacts/release-tools
+cargo install --locked --debug cargo-cyclonedx --version 0.5.9 --root artifacts/release-tools
 pwsh -NoProfile -File scripts/test-windows-preview.ps1
 pwsh -NoProfile -File scripts/package-windows-preview.ps1
 ```
 
 The packaging script builds `cargo build --locked --release -p stemplayer --target x86_64-pc-windows-msvc`. It preserves the release profile and uses packaging-scoped compiler flags for static CRT linkage and workspace/Cargo source-path remapping. MSVC Build Tools with `vswhere` and `dumpbin` are required on the build machine, not the user's PC. The import check rejects non-system DLLs, including VC redistributable DLLs. The script records the default product feature set and rejects dirty source trees, a changed source revision before archiving, non-preview versions, incomplete inputs, changed Slint terms, mismatched build identity, or existing release assets. Versioned output is under ignored `artifacts/windows-preview/`; temporary build and packaging-check directories are local evidence, not release assets.
+
+Build-only notice/SBOM tools use debug builds to avoid spending the fresh runner's time optimizing tools that are not shipped. The application still uses the unchanged release profile. The packaging job allows 90 minutes for the clean build.
 
 The ZIP has one versioned folder containing only `stemplayer.exe`, `README.txt`, both project license files, `THIRD-PARTY-NOTICES.txt`, `sbom.cdx.json`, and `BUILD-INFO.json`. Build information records source commit, compiler, target, features, lock/binary hashes, and an explicitly unqualified unsigned state.
 

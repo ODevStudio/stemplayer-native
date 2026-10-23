@@ -126,7 +126,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     needs: [workflow-integrity, quality, dependency-policy]
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     defaults:
@@ -144,9 +144,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
       - name: Install pinned release tools
         run: |
-          cargo install --locked cargo-about --version 0.9.2 --features cli --root artifacts/release-tools
+          cargo install --locked --debug cargo-about --version 0.9.2 --features cli --root artifacts/release-tools
           if ($LASTEXITCODE -ne 0) { throw 'cargo-about installation failed' }
-          cargo install --locked cargo-cyclonedx --version 0.5.9 --root artifacts/release-tools
+          cargo install --locked --debug cargo-cyclonedx --version 0.5.9 --root artifacts/release-tools
           if ($LASTEXITCODE -ne 0) { throw 'cargo-cyclonedx installation failed' }
       - name: Build unqualified unsigned preview
         run: ./scripts/package-windows-preview.ps1
