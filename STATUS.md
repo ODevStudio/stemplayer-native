@@ -6,7 +6,7 @@ Current status: blocked.
 
 The local player, mixer, waveform, diagnostics, `stem-hls-v1` playback gates, and Windows icon set are implemented, but the audit integration blockers below remain open. Phase 11 also cannot advance until the product identity, publisher identity, application identifier, signing credentials, Windows packaging toolchain, and clean-system qualification environments are supplied.
 
-The first release remains Windows-qualified. macOS and Linux packaging are optional later platform expansions. Automatic updates remain disabled.
+The first release targets Windows. macOS and Linux packaging are optional later platform expansions. Automatic updates remain disabled.
 
 ## Windows Preview
 
@@ -82,4 +82,6 @@ The [notice review](docs/release/windows-preview.md#upstream-notice-prerequisite
 
 Actions is enabled with maintainer approval. The full [source CI run](https://github.com/ODevStudio/stemplayer-native/actions/runs/39862835870) passed at `20a196d2bcd42ff8a7a12cbe5a30568345eef05c`: workflow integrity, dependency policy, and quality jobs on Windows, Ubuntu, and macOS. This includes workspace Clippy/tests, product tests/builds, separate development-profile UI startup checks, both feature checks, and the Windows synthetic packaging check. The previously failing cache-lock and fixture regressions pass on macOS. No test was suppressed or validation weakened. Subsequent changes only record this evidence; they do not change runtime code or qualify a release artifact.
 
-The existing release page has no binary assets yet. A fresh Windows packaging run and publication are pending. No private-repository hosted job was dispatched. Clean Windows, human accessibility/listening, device recovery, suspend/resume, one-hour playback, and candidate performance checks remain unexecuted for this artifact. No signing or stable-release completion is claimed.
+[Version 0.1.0-preview.1 is published](https://github.com/ODevStudio/stemplayer-native/releases/tag/v0.1.0-preview.1) with the unchanged Windows ZIP and `SHA256SUMS.txt` from successful [manual CI run 39959398372](https://github.com/ODevStudio/stemplayer-native/actions/runs/39959398372), source/tag commit `f589012f48c8a340609e61a751001a28cdbd33b9`. Anonymous downloads match the original assets; ZIP SHA-256 is `fab2ecf57a3d4d965568b7bf3e4b0885fc7e13045104ae7cdffb889d070add53`. The archive contains only the seven approved files, its x64 executable imports only approved system DLLs, and its SBOM has 431 components and no broken dependency references. No private-repository hosted job was dispatched.
+
+Clean Windows, human accessibility/listening, device recovery, suspend/resume, one-hour playback, and candidate performance checks remain unexecuted for this artifact. No signing or stable-release completion is claimed.
