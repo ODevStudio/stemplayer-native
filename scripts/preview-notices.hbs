@@ -1,6 +1,6 @@
 Stemplayer Native third-party notices
 
-Includes dependencies and build-time components for the Windows product build.
+Includes dependencies and build-time components for the selected product target.
 Slint is used under LicenseRef-Slint-Royalty-free-2.0.
 Unmodified MPL-2.0 component source is available from the exact crate URLs below.
 The local AAC decoder patch and its complete modified source are identified at the end.
@@ -80,7 +80,51 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 {{else}}
+{{#if (and (eq id "MIT") (not source_path)
+    (eq used_by.[0].crate.name "block2") (eq used_by.[0].crate.version "0.5.1")
+    (eq used_by.[1].crate.name "block2") (eq used_by.[1].crate.version "0.6.2")
+    (eq used_by.[2].crate.name "dispatch") (eq used_by.[2].crate.version "0.2.0")
+    (eq used_by.[3].crate.name "objc-sys") (eq used_by.[3].crate.version "0.3.5")
+    (eq used_by.[4].crate.name "objc2-app-kit") (eq used_by.[4].crate.version "0.2.2")
+    (eq used_by.[5].crate.name "objc2-encode") (eq used_by.[5].crate.version "4.1.0")
+    (eq used_by.[6].crate.name "objc2-foundation") (eq used_by.[6].crate.version "0.2.2")
+    (eq used_by.[7].crate.name "objc2-foundation") (eq used_by.[7].crate.version "0.3.2")
+    (eq used_by.[8].crate.name "objc2") (eq used_by.[8].crate.version "0.5.2")
+    (eq used_by.[9].crate.name "objc2") (eq used_by.[9].crate.version "0.6.4")
+    (not used_by.[10]))}}
+These exact macOS components declare MIT in their published Cargo manifests.
+Upstream author metadata (not synthesized copyright notices):
+{{#each used_by}}
+{{crate.name}} {{crate.version}}: {{#each crate.authors}}{{{this}}}; {{/each}}
+{{/each}}
+
+Retained original objc2-family MIT notice:
+https://github.com/madsmtm/objc2/blob/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt
+Original notice SHA-256: e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5
+Newer releases retain their MIT declaration in the upstream LICENSE.md:
+https://github.com/madsmtm/objc2/blob/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md
+Copyright (c) Steven Sheldon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+{{else}}
 {{{text}}}
+{{/if}}
 {{/if}}
 
 {{/each}}

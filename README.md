@@ -1,14 +1,18 @@
 # Stemplayer Native
 
-Play your music, or take control of the individual stems. Stemplayer Native is a Windows desktop audio player with a four-stem mixer, waveform navigation, playlists, and local or HLS playback.
+Play your music, or take control of the individual stems. Stemplayer Native is a desktop audio player with a four-stem mixer, waveform navigation, playlists, and local or HLS playback.
 
 ## Download
 
-[Download for Windows](https://github.com/ODevStudio/stemplayer-native/releases/tag/v0.1.0-preview.1)
+| Platform | Requirements | Download |
+| --- | --- | --- |
+| Windows x64 | Windows 11 24H2 or newer | [Portable ZIP](https://github.com/ODevStudio/stemplayer-native/releases/download/v0.1.0-preview.1/stemplayer-native-0.1.0-preview.1-windows-x86_64.zip) |
+| Linux x64 | Ubuntu 24.04 or newer, graphical desktop | [tar.gz](https://github.com/ODevStudio/stemplayer-native/releases/download/v0.1.0-preview.1/stemplayer-native-0.1.0-preview.1-linux-x86_64.tar.gz) |
+| macOS Apple silicon | macOS 14 or newer | [Application ZIP](https://github.com/ODevStudio/stemplayer-native/releases/download/v0.1.0-preview.1/stemplayer-native-0.1.0-preview.1-macos-aarch64.zip) |
 
-Requires **Windows 11 24H2 or newer, x64**. Download the ZIP, extract it, and run `stemplayer.exe`. No installation or administrator access is needed.
+Extract the complete archive. On Windows, run `stemplayer.exe`; on Linux, run `./stemplayer`; on macOS, open `Stemplayer Native.app`. No installer is needed. Linux uses system audio, font, display, and desktop-portal libraries; the bundled README lists the required Ubuntu packages. Intel Macs are not included.
 
-The preview is unsigned, so Windows may display a reputation warning. Keep Defender, SmartScreen, and other protections enabled. The release includes `SHA256SUMS.txt` for checking download integrity.
+The preview has no verified publisher signature. Windows may display a reputation warning; macOS uses an ad-hoc signature and is not notarized. Keep Defender, SmartScreen, Gatekeeper, and other protections enabled. The [release page](https://github.com/ODevStudio/stemplayer-native/releases/tag/v0.1.0-preview.1) includes checksums for download integrity.
 
 ## Features
 
@@ -29,13 +33,17 @@ Keep a Studio WAV bundle's manifest and tracks together. The player does not sep
 
 ## Settings and Removal
 
-Settings and playlists are stored in `%APPDATA%/stemplayer-native`; data and waveform cache are stored in `%LOCALAPPDATA%/stemplayer-native`. The portable ZIP does not keep these inside its extraction folder.
+Settings and user data are stored outside the extraction folder:
 
-To remove the application, close it and delete its extracted folder. To reset settings and cache as well, remove only the two named per-user folders. Back up settings before switching versions.
+- Windows: `%APPDATA%/stemplayer-native` for settings and playlists; `%LOCALAPPDATA%/stemplayer-native` for data and cache.
+- Linux: `stemplayer-native` under the XDG configuration, data, and cache directories, normally `~/.config`, `~/.local/share`, and `~/.cache`.
+- macOS: `stemplayer-native` under `~/Library/Preferences`, `~/Library/Application Support`, and `~/Library/Caches`.
+
+To remove the application, close it and delete its extracted folder. To reset settings and cache as well, remove only its named `stemplayer-native` directories. Back up settings before switching versions.
 
 ## Feedback
 
-[Report a bug](https://github.com/ODevStudio/stemplayer-native/issues) with the version and commit from `BUILD-INFO.json`, Windows version, source format, and steps to reproduce it. Keep private audio, settings, full paths, and secret URLs out of reports. See the [security policy](SECURITY.md) for vulnerabilities.
+[Report a bug](https://github.com/ODevStudio/stemplayer-native/issues) with the version and commit from `BUILD-INFO.json`, operating system, source format, and steps to reproduce it. Keep private audio, settings, full paths, and secret URLs out of reports. See the [security policy](SECURITY.md) for vulnerabilities.
 
 ![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/v1.17.1/logo/MadeWithSlint-logo-whitebg.png)
 
@@ -48,7 +56,7 @@ cargo build --locked --release -p stemplayer
 cargo run --locked --release -p stemplayer
 ```
 
-Linux source builds require the audio and font development libraries listed in CI. Downloadable releases currently target Windows x64.
+Linux source builds require the audio and font development libraries listed in CI. The Linux package also includes application and Plasma protocol-library source with rebuilding instructions.
 
 ## Documentation
 

@@ -30,7 +30,7 @@ The accepted license list matches the locked workspace graph, including Slint's 
 
 ### Linux D-Bus Maintenance Exceptions
 
-On 2026-10-21 the maintainer approved `RUSTSEC-2026-0370` (`zvariant 5.13.1`), `RUSTSEC-2026-0371` (`zbus_names 4.3.4`), and `RUSTSEC-2026-0372` (`zvariant_derive 5.13.1`). These are maintenance-only notices: the retired crates were incorporated into zbus 6. The locked Linux graph still needs zbus 5 through Slint's winit/accesskit backend and rfd's ashpd portal. No compatible complete upgrade is available through those parents. Linux is not a supported preview target.
+On 2026-10-21 the maintainer approved `RUSTSEC-2026-0370` (`zvariant 5.13.1`), `RUSTSEC-2026-0371` (`zbus_names 4.3.4`), and `RUSTSEC-2026-0372` (`zvariant_derive 5.13.1`). These are maintenance-only notices: the retired crates were incorporated into zbus 6. The locked Linux graph still needs zbus 5 through Slint's winit/accesskit backend and rfd's ashpd portal. No compatible complete upgrade is available through those parents. The additional [Linux preview packaging](../release/unix-preview.md) retains these exact exceptions and the enforcing workspace gate; no vulnerability exception is added.
 
 These three exact IDs are ignored, not their packages or future vulnerabilities. The workspace `cargo deny check` gate remains required. The product integration test `windows_product_excludes_retired_linux_dbus_packages` rejects any of these packages reachable from the default Windows application graph. Review the exceptions at every Slint/rfd update; remove them once all parents migrate off the retired crates. Linux distribution requires a new dependency and qualification review. See the [security refresh evidence](../qualification/windows-preview-security-refresh.md).
 
@@ -47,3 +47,5 @@ Ordinary pull requests must not depend on audio hardware, interactive desktop st
 ## Release boundary
 
 The [Windows hobby preview](../release/windows-preview.md) permits a manual-dispatch-only packaging job after all ordinary CI gates pass. Use a clean build directory, no restored build cache, read-only repository permissions, and pinned build tools/actions. Upload candidate artifacts only; do not publish, sign, create an installer, enable automatic updates, or represent the artifact as qualified. See `STATUS.md` for remaining publication and signed-release blockers.
+
+The same workflow's `linux-and-macos` dispatch selection builds additional archives from the immutable published application commit with reviewed packaging code. It skips Windows packaging, uses system-only runtime dependency checks, and uploads uniquely named archive/checksum pairs. macOS uses local ad-hoc signing without publisher credentials or notarization. Publication remains a separate maintainer operation; see the [Unix packaging procedure](../release/unix-preview.md).

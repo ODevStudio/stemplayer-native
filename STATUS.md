@@ -6,7 +6,7 @@ Current status: blocked.
 
 The local player, mixer, waveform, diagnostics, `stem-hls-v1` playback gates, and Windows icon set are implemented, but the audit integration blockers below remain open. Phase 11 also cannot advance until the product identity, publisher identity, application identifier, signing credentials, Windows packaging toolchain, and clean-system qualification environments are supplied.
 
-The first release targets Windows. macOS and Linux packaging are optional later platform expansions. Automatic updates remain disabled.
+The first release targets Windows. Additional Linux x64 and macOS Apple silicon preview packaging is now authorized; stable platform qualification remains separate. Automatic updates remain disabled.
 
 ## Windows Preview
 
@@ -85,3 +85,9 @@ Actions is enabled with maintainer approval. The full [source CI run](https://gi
 [Version 0.1.0-preview.1 is published](https://github.com/ODevStudio/stemplayer-native/releases/tag/v0.1.0-preview.1) with the unchanged Windows ZIP and `SHA256SUMS.txt` from successful [manual CI run 39959398372](https://github.com/ODevStudio/stemplayer-native/actions/runs/39959398372), source/tag commit `f589012f48c8a340609e61a751001a28cdbd33b9`. Anonymous downloads match the original assets; ZIP SHA-256 is `fab2ecf57a3d4d965568b7bf3e4b0885fc7e13045104ae7cdffb889d070add53`. The archive contains only the seven approved files, its x64 executable imports only approved system DLLs, and its SBOM has 431 components and no broken dependency references. No private-repository hosted job was dispatched.
 
 Clean Windows, human accessibility/listening, device recovery, suspend/resume, one-hour playback, and candidate performance checks remain unexecuted for this artifact. No signing or stable-release completion is claimed.
+
+## Additional Platform Previews
+
+Linux x64 and macOS Apple silicon archives are being prepared through the [Unix packaging path](docs/release/unix-preview.md), using the unchanged `v0.1.0-preview.1` application commit. Existing Windows assets, checksum, and tag remain immutable. Linux uses an Ubuntu 24.04/glibc desktop baseline; macOS uses a macOS 14 minimum and an ad-hoc-signed application bundle without Developer ID or notarization. Dependency review retains the existing exact maintenance-only exceptions and adds no advisory ignores. Linux includes complete application/Plasma protocol-library source and replacement instructions for the protocol specifications' additional license obligations.
+
+No new platform archive is published yet. Native packaging, dependency inspection, extracted startup checks, and final asset review remain pending. Native-device listening, accessibility, high-DPI, suspend/resume, soak, and clean-system results are not claimed, and the optional Phase 12 platform qualifications remain incomplete.

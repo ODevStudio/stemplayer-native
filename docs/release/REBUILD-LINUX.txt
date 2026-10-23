@@ -1,0 +1,47 @@
+Rebuilding Stemplayer Native 0.1.0-preview.1 for Linux
+
+This archive contains the complete application source at public commit
+f589012f48c8a340609e61a751001a28cdbd33b9, including the modified AAC decoder,
+and the original wayland-protocols-plasma 0.3.12 source archive in third-party/.
+The Plasma crate includes its protocol specifications and original licenses.
+Its archive SHA-256 is:
+2b6d8cf1eb2c1c31ed1f5643c88a6e53538129d4af80030c8cabd1f9fa884d91
+
+Application sources are MIT OR Apache-2.0. Retain the supplied licenses and
+third-party notices. Plasma bindings are MIT; their protocol specifications
+include LGPL-2.1-or-later and other terms reproduced in the crate and notices.
+Modification, rebuilding, replacement, and debugging are not prohibited.
+
+On Ubuntu 24.04 x86-64, install Rust using the official Rust distribution and
+install the native build dependencies:
+
+sudo apt install build-essential pkg-config libasound2-dev libfontconfig1-dev libx11-dev libx11-xcb-dev libxcursor-dev libxkbcommon-x11-dev
+
+The application source includes rust-toolchain.toml pinning Rust 1.97.1.
+From this source directory, build the original application with:
+
+cargo build --locked --release -p stemplayer --target x86_64-unknown-linux-gnu
+
+The executable is target/x86_64-unknown-linux-gnu/release/stemplayer. The
+release profile uses thin LTO and one code-generation unit, as in Cargo.toml.
+Cargo downloads the exact remaining registry dependencies from Cargo.lock.
+Their complete source locations are also listed in THIRD-PARTY-NOTICES.txt.
+No Node.js, Python, browser, converter, or FFmpeg runtime is required.
+
+To replace or modify the LGPL-covered protocol library, extract its archive:
+
+tar -xzf third-party/wayland-protocols-plasma-0.3.12.crate -C third-party
+
+Edit that extracted source as needed. Add the following entry to the existing
+[patch.crates-io] table in the application Cargo.toml, retaining the AAC entry:
+
+wayland-protocols-plasma = { path = "third-party/wayland-protocols-plasma-0.3.12" }
+
+Then rebuild with the local replacement:
+
+cargo build --release -p stemplayer --target x86_64-unknown-linux-gnu
+
+This replacement changes the relevant Cargo.lock source identity, so --locked
+is deliberately omitted for that modified build. The remaining dependencies
+need not be upgraded. Run the rebuilt executable directly; it has no publisher
+signature or installation restriction that prevents using a modified library.

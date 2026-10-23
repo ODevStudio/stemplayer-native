@@ -6,6 +6,12 @@ on:
     branches: [master]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      packages:
+        description: Packages to build
+        type: choice
+        options: [windows, linux-and-macos]
+        default: windows
 
 permissions:
   contents: read
@@ -82,6 +88,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-windows-preview.ps1
+      - name: Unix packaging checks
+        if: runner.os != 'Windows'
+        shell: pwsh
+        run: ./scripts/test-unix-preview.ps1
       - name: Product release build
         run: cargo build --locked --release -p stemplayer
       - name: UI startup smoke
@@ -123,7 +133,7 @@ jobs:
         run: cargo deny check
 
   package-windows-preview:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.packages != 'linux-and-macos'
     needs: [workflow-integrity, quality, dependency-policy]
     runs-on: windows-2025
     timeout-minutes: 90
@@ -157,5 +167,69 @@ jobs:
           path: |
             artifacts/windows-preview/*/stemplayer-native-*-windows-x86_64.zip
             artifacts/windows-preview/*/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  package-unix-preview:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.packages == 'linux-and-macos'
+    needs: [workflow-integrity, quality, dependency-policy]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            slug: linux-x86_64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            slug: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # actions/checkout v4.2.2
+        with:
+          ref: f589012f48c8a340609e61a751001a28cdbd33b9
+          path: artifacts/unix-source
+          persist-credentials: false
+      - name: Install Linux build and runtime dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libfontconfig1-dev libx11-xcb-dev libxcursor-dev \
+            libxkbcommon-x11-dev libx11-dev libxrandr2 libxi6 libwayland-client0 \
+            libwayland-cursor0 libwayland-egl1 libdbus-1-3 xvfb xauth \
+            xdg-desktop-portal xdg-desktop-portal-gtk
+      - name: Install pinned Rust and release tools
+        run: |
+          $channel = (Select-String rust-toolchain.toml -Pattern '^channel = "([^"]+)"$').Matches.Groups[1].Value
+          if (-not $channel) { throw 'Missing pinned Rust toolchain' }
+          rustup toolchain install --profile minimal --target '${{ matrix.target }}' $channel
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
+          cargo install --locked --debug cargo-about --version 0.9.2 --features cli --root artifacts/release-tools
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-about installation failed' }
+          cargo install --locked --debug cargo-cyclonedx --version 0.5.9 --root artifacts/release-tools
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-cyclonedx installation failed' }
+      - name: Build and check Linux archive
+        if: runner.os == 'Linux'
+        shell: bash
+        run: xvfb-run -a pwsh -NoProfile -File scripts/package-unix-preview.ps1 -SourceDirectory artifacts/unix-source
+      - name: Build and check macOS application archive
+        if: runner.os == 'macOS'
+        run: ./scripts/package-unix-preview.ps1 -SourceDirectory artifacts/unix-source
+      - name: Upload Unix archive and its checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact v4.6.2
+        with:
+          name: unix-preview-${{ matrix.target }}-${{ github.sha }}
+          path: artifacts/unix-preview/${{ matrix.slug }}/0.1.0-preview.1/*
           if-no-files-found: error
           retention-days: 30

@@ -102,7 +102,14 @@ function Assert-PreviewPayload {
         $bom.metadata.component.version -cne $info.version -or @($bom.components).Count -eq 0) {
         throw 'Invalid preview SBOM or product version'
     }
-    $notices = Get-Content -LiteralPath (Join-Path $Directory 'THIRD-PARTY-NOTICES.txt') -Raw
+    Assert-PreviewNotices (Join-Path $Directory 'THIRD-PARTY-NOTICES.txt') $info.source_commit
+    return $info
+}
+
+function Assert-PreviewNotices {
+    param([string]$Path, [string]$Commit)
+
+    $notices = Get-Content -LiteralPath $Path -Raw
     if (-not $notices.Contains('Slint Royalty-free Desktop, Mobile, and Web Applications License') -or
         -not $notices.Contains('MPL-2.0') -or -not $notices.Contains('Mozilla Public License')) {
         throw 'Required dependency license text is missing'
@@ -120,10 +127,9 @@ function Assert-PreviewPayload {
         throw 'Required AccessKit Chromium attribution is missing'
     }
     if (-not $notices.Contains('Modified symphonia-codec-aac 0.6.0 (MPL-2.0)') -or
-        -not $notices.Contains("Full modified source: https://github.com/ODevStudio/stemplayer-native/tree/$($info.source_commit)/vendor/symphonia-codec-aac")) {
+        -not $notices.Contains("Full modified source: https://github.com/ODevStudio/stemplayer-native/tree/$Commit/vendor/symphonia-codec-aac")) {
         throw 'Required modified AAC source notice does not match build identity'
     }
-    return $info
 }
 
 function New-PreviewArchive {
@@ -180,7 +186,8 @@ function Add-PreviewAacNotice {
 }
 
 function New-PreviewSbom {
-    param([object]$Metadata, [string]$Tool, [string]$Destination, [string]$Root)
+    param([object]$Metadata, [string]$Tool, [string]$Destination, [string]$Root,
+        [string]$Target = 'x86_64-pc-windows-msvc')
 
     $basename = 'preview-sbom-' + [Guid]::NewGuid().ToString('N')
     $paths = @($Metadata.packages | Where-Object { $_.id -in $Metadata.workspace_members } | ForEach-Object {
@@ -194,7 +201,7 @@ function New-PreviewSbom {
     $lock = (Get-FileHash -LiteralPath (Join-Path $Root 'Cargo.lock') -Algorithm SHA256).Hash
     try {
         Invoke-PreviewCommand $Tool @('cyclonedx', '--manifest-path', 'apps/stemplayer/Cargo.toml',
-            '--target', 'x86_64-pc-windows-msvc', '--format', 'json', '--spec-version', '1.5',
+            '--target', $Target, '--format', 'json', '--spec-version', '1.5',
             '--all', '--override-filename', $basename)
         $generated = Join-Path $Root "apps/stemplayer/$basename.json"
         if ((Get-Item -LiteralPath $generated).Length -gt 16MB) {

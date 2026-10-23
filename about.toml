@@ -21,6 +21,52 @@ ignore-dev-dependencies = true
 private = { ignore = true }
 workarounds = ["chrono", "ring", "rustls", "unicode-ident"]
 
+[wayland-protocols-plasma]
+accepted = ["LGPL-2.1-or-later"]
+[wayland-protocols-plasma.clarify]
+license = "MIT AND LGPL-2.1-or-later"
+[[wayland-protocols-plasma.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "1cb6f4dee8c649f175736380495f0af0c753c87f22d50931692968bb24bf2161"
+[[wayland-protocols-plasma.clarify.files]]
+path = "plasma-wayland-protocols/LICENSES/LGPL-2.1-or-later.txt"
+license = "LGPL-2.1-or-later"
+checksum = "1ccf09bf2f598308df4bed9cd8e9657dc5cd0973d2800318f2e241486e2edf3f"
+
+[accesskit_atspi_common.clarify]
+license = "Apache-2.0 AND BSD-3-Clause"
+[[accesskit_atspi_common.clarify.git]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+[[accesskit_atspi_common.clarify.git]]
+path = "LICENSE.chromium"
+license = "BSD-3-Clause"
+checksum = "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+
+[accesskit_unix.clarify]
+license = "Apache-2.0 AND BSD-3-Clause"
+[[accesskit_unix.clarify.git]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+[[accesskit_unix.clarify.git]]
+path = "LICENSE.chromium"
+license = "BSD-3-Clause"
+checksum = "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+
+[accesskit_macos.clarify]
+license = "Apache-2.0 AND BSD-3-Clause"
+[[accesskit_macos.clarify.git]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+[[accesskit_macos.clarify.git]]
+path = "LICENSE.chromium"
+license = "BSD-3-Clause"
+checksum = "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+
 [realfft.clarify]
 license = "MIT"
 [[realfft.clarify.files]]
