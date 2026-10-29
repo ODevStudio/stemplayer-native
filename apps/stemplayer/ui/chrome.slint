@@ -45,6 +45,7 @@ export struct PlaylistRow {
 
 export component PlaylistPanel inherits Rectangle {
     in property <[PlaylistRow]> items;
+    in property <string> current-track;
     in-out property <int> selected-index: 0;
     in-out property <bool> expanded: true;
     callback selected(int, bool, bool);
@@ -84,9 +85,7 @@ export component PlaylistPanel inherits Rectangle {
         z: 2;
         width: parent.width - 44px;
         height: 32px;
-        text: root.items.length == 0 || root.selected-index < 0
-            ? "No track selected"
-            : root.items[root.selected-index].label;
+        text: root.current-track;
         color: Palette.foreground;
         font-size: 12px;
         font-weight: 600;

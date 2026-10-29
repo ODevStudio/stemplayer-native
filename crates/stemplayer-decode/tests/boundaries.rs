@@ -176,6 +176,59 @@ fn ordinary_mp4_duration_and_windows_follow_presentation_edits() {
     }
 }
 
+#[test]
+fn ordinary_mp4_rounds_the_final_edit_to_available_media_without_padding() {
+    let scratch = Scratch::new();
+    let original = include_bytes!("fixtures/stereo-aac.m4a");
+    let tag = original
+        .windows(4)
+        .position(|value| value == b"elst")
+        .unwrap();
+    assert_eq!(&original[tag + 4..tag + 8], &[0; 4]);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let info = inspect_audio_file(&fixture("stereo-aac.m4a")).unwrap();
+    let frames = info.declared_frames.unwrap();
+    let mut reference = CompressedTrackDecoder::open_audio_inspected(
+        &fixture("stereo-aac.m4a"),
+        &info,
+        Arc::clone(&cancelled),
+    )
+    .unwrap();
+    let expected = reference
+        .decode_window(frames - 128, 128, &cancelled)
+        .unwrap();
+
+    for duration in [501_u32, 502] {
+        let mut bytes = original.to_vec();
+        bytes[tag + 12..tag + 16].copy_from_slice(&duration.to_be_bytes());
+        let path = scratch.write(&format!("rounded-{duration}.m4a"), &bytes);
+        if duration == 502 {
+            assert_eq!(
+                inspect_audio_file(&path).unwrap_err().code,
+                ErrorCode::PresentationRangeInvalid,
+            );
+            continue;
+        }
+        assert_eq!(
+            inspect_compressed_tracks(&path).unwrap_err().code,
+            ErrorCode::PresentationRangeInvalid,
+        );
+        let rounded = inspect_audio_file(&path).unwrap();
+        assert_eq!(rounded.declared_frames, Some(frames));
+        let mut decoder =
+            CompressedTrackDecoder::open_audio_inspected(&path, &rounded, Arc::clone(&cancelled))
+                .unwrap();
+        for _ in 0..2 {
+            let actual = decoder
+                .decode_window(frames - 128, 128, &cancelled)
+                .unwrap();
+            assert_eq!(actual.left, expected.left);
+            assert_eq!(actual.right, expected.right);
+        }
+        assert!(decoder.decode_window(frames, 1, &cancelled).is_err());
+    }
+}
+
 fn atom(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
     [
         u32::try_from(body.len() + 8)

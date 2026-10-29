@@ -565,6 +565,7 @@ export component AppWindow inherits Window {
         }
         if root.playlist-items.length > 0: PlaylistPanel {
             items: root.playlist-items;
+            current-track: root.can-seek ? root.source-name : "No track playing";
             selected-index <=> root.playlist-index;
             expanded <=> root.playlist-expanded;
             selected(index, control, shift) => { root.select-playlist-item(index, control, shift); }

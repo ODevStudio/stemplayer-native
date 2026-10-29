@@ -43,8 +43,9 @@ impl PlayerController for Recorder {
 #[test]
 fn play_selection_export_admission_and_gain_flush_are_consistent() {
     let now = Rc::new(Cell::new(Duration::ZERO));
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(TestPlatform {
-        window: MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer),
+        window: Rc::clone(&window),
         now: Rc::clone(&now),
     }))
     .unwrap();
@@ -98,9 +99,60 @@ fn play_selection_export_admission_and_gain_flush_are_consistent() {
     now.set(Duration::from_secs(1));
     slint::platform::update_timers_and_animations();
     assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    playing_header_does_not_follow_playlist_focus(&app, &window, &playlist);
     delayed_discovery_preserves_newer_source_intent(&app);
     latest_discovery_activates_in_either_completion_order(&app);
     stale_discovery_preserves_playlist_selection_and_history(&app);
+}
+
+fn playing_header_does_not_follow_playlist_focus(
+    app: &AppWindow,
+    window: &MinimalSoftwareWindow,
+    playlist: &Arc<Mutex<Playlist>>,
+) {
+    app.set_playlist_expanded(false);
+    app.show().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(780, 620));
+    let render = || {
+        app.window().request_redraw();
+        let size = app.window().size();
+        let mut pixels = vec![slint::Rgb8Pixel::default(); (size.width * size.height) as usize];
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, size.width as usize);
+        }));
+        assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+        pixels
+    };
+    for state in [TransportState::Playing, TransportState::Paused] {
+        present(app, &source_metadata_snapshot(state, None));
+        playlist.lock().unwrap().select(0, false, false);
+        present_playlist(&app.as_weak(), playlist);
+        let before = render();
+        playlist.lock().unwrap().select(1, false, false);
+        present_playlist(&app.as_weak(), playlist);
+        assert!(
+            before == render(),
+            "Playlist focus changed the playing header"
+        );
+        app.set_source_name("Another playing source".into());
+        assert!(
+            before != render(),
+            "The playing source did not update the header"
+        );
+    }
+    for snapshot in [
+        PlayerSnapshot::empty(TransportState::Empty),
+        source_metadata_snapshot(TransportState::Error, None),
+    ] {
+        present(app, &snapshot);
+        let before = render();
+        app.set_source_name("Unplayed source".into());
+        assert!(
+            before == render(),
+            "An inactive source appeared in the header"
+        );
+    }
+    app.hide().unwrap();
 }
 
 fn discovered_item(index: usize) -> crate::playlist::PlaylistItem {
